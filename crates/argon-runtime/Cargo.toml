@@ -1,0 +1,13 @@
+[package]
+name = "argon-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Lock-free ring-buffer memory allocator and non-blocking Forward-Forward execution coordinator."
+
+[dependencies]
+argon-kernel = { path = "../argon-kernel" }
+
+[lints]
+workspace = true

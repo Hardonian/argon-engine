@@ -1,0 +1,65 @@
+name: Argon Engine CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust-toolchain-gate:
+    name: Rust Nightly (Fmt, Clippy -D warnings, Test, WASM)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Nightly Toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Rust Cargo Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify Formatting
+        run: cargo +nightly fmt --all -- --check
+
+      - name: Run Strict Clippy Lints
+        run: cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Execute Workspace Unit & Integration Tests
+        run: cargo +nightly test --workspace --all-features -- --nocapture
+
+      - name: Verify WASM Target Compilation
+        run: cargo +nightly build -p argon-wasm --target wasm32-unknown-unknown --release
+
+  typescript-harness-gate:
+    name: TypeScript Strict Harness & Triton Fallback Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install & Verify TypeScript Bindings
+        working-directory: bindings/ts
+        run: |
+          npm install
+          npm run typecheck
+          npm run build
+          npm test
+
+      - name: Verify Triton Kernel CPU Simulation Fallback
+        run: |
+          python3 -m pip install --upgrade pip numpy
+          python3 kernels/triton/persistent_sram_ff.py

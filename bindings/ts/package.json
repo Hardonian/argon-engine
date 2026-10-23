@@ -1,0 +1,16 @@
+{
+  "name": "@hardonian/argon-ts-harness",
+  "version": "0.1.0",
+  "description": "Strict TypeScript orchestration harness for the Argon persistent SRAM execution engine",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "node --test dist/index.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "typescript": "^5.6.3"
+  }
+}

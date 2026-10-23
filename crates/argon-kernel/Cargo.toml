@@ -1,0 +1,15 @@
+[package]
+name = "argon-kernel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Bare-metal PTX persistent kernel emitter and ARM64/CPU deterministic fallback simulator for Argon."
+
+[features]
+default = ["cpu-fallback"]
+cuda-ptx = []
+cpu-fallback = []
+
+[lints]
+workspace = true
