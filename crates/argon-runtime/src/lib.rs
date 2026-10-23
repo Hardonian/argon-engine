@@ -411,11 +411,50 @@ impl ArgonCoordinator {
         }
 
         let mut frame = self.ring_buffer.try_pop()?;
-        let mut step_plasticity = self.base_plasticity;
-        step_plasticity.phase_polarity = frame.phase_polarity;
-
         self.scratch_a.copy_from_slice(&frame.features);
         std::mem::swap(recycled_features, &mut frame.features);
+        self.execute_loaded(frame.sequence_id, frame.phase_polarity, output_action)
+    }
+
+    /// Executes borrowed features directly without queueing or allocating.
+    ///
+    /// This is intended for synchronous FFI and WASM callers. Streaming
+    /// producers should continue to use [`Self::submit_frame`].
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] for invalid dimensions, phase polarity, or
+    /// kernel execution failures.
+    pub fn step_borrowed(
+        &mut self,
+        sequence_id: u64,
+        phase_polarity: f32,
+        features: &[f32],
+        output_action: &mut [f32],
+    ) -> Result<TickTelemetry, RuntimeError> {
+        if features.len() != self.tile_dim {
+            return Err(RuntimeError::Kernel(KernelError::DimensionMismatch {
+                expected: self.tile_dim,
+                actual: features.len(),
+            }));
+        }
+        if output_action.len() != self.tile_dim {
+            return Err(RuntimeError::Kernel(KernelError::DimensionMismatch {
+                expected: self.tile_dim,
+                actual: output_action.len(),
+            }));
+        }
+        self.scratch_a.copy_from_slice(features);
+        self.execute_loaded(sequence_id, phase_polarity, output_action)
+    }
+
+    fn execute_loaded(
+        &mut self,
+        sequence_id: u64,
+        phase_polarity: f32,
+        output_action: &mut [f32],
+    ) -> Result<TickTelemetry, RuntimeError> {
+        let mut step_plasticity = self.base_plasticity;
+        step_plasticity.phase_polarity = phase_polarity;
         let mut total_goodness = 0.0_f32;
 
         for (layer_idx, tile) in self.tiles.iter_mut().enumerate() {
@@ -444,7 +483,7 @@ impl ArgonCoordinator {
         let mean_goodness = total_goodness / (self.tiles.len() as f32);
 
         Ok(TickTelemetry {
-            sequence_id: frame.sequence_id,
+            sequence_id,
             mean_goodness,
             output_l2_norm: l2_sq.sqrt(),
             total_ticks: self.total_ticks,
@@ -515,6 +554,66 @@ mod tests {
         assert_eq!(telemetry.sequence_id, 42);
         assert_eq!(telemetry.total_ticks, 1);
         assert!(telemetry.mean_goodness > 0.0);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_enqueue_returns_feature_allocation() -> Result<(), RuntimeError> {
+        let ring = SpscRingBuffer::with_capacity(2)?;
+        let (producer, consumer) = ring.split();
+        for sequence_id in 0..2 {
+            producer
+                .try_push(ControlFrame {
+                    sequence_id,
+                    phase_polarity: 1.0,
+                    features: vec![0.5; 4],
+                })
+                .map_err(|(error, _frame)| error)?;
+        }
+        let rejected = ControlFrame {
+            sequence_id: 2,
+            phase_polarity: 1.0,
+            features: vec![2.0; 4],
+        };
+        let pointer = rejected.features.as_ptr();
+        let Err((_error, recovered)) = producer.try_push(rejected) else {
+            return Err(RuntimeError::InvalidConfiguration(
+                "full ring unexpectedly accepted a frame",
+            ));
+        };
+        assert_eq!(pointer, recovered.features.as_ptr());
+        assert_eq!(consumer.try_pop()?.sequence_id, 0);
+        assert_eq!(consumer.try_pop()?.sequence_id, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn coordinator_snapshot_restores_checksum() -> Result<(), RuntimeError> {
+        let grid = PersistentGridConfig {
+            grid_dim_x: 1,
+            block_dim_x: 64,
+            shared_mem_bytes: 16_384,
+            tile_dim: 8,
+        };
+        let plasticity = PlasticityConfig {
+            learning_rate: 0.02,
+            goodness_threshold: 1.5,
+            weight_decay: 0.0005,
+            phase_polarity: 1.0,
+        };
+        let mut coordinator = ArgonCoordinator::new(2, &grid, plasticity, 4)?;
+        let snapshot = coordinator.snapshot();
+        let initial_checksum = coordinator.weight_checksum();
+        coordinator.submit_frame(ControlFrame {
+            sequence_id: 0,
+            phase_polarity: 1.0,
+            features: vec![0.5; 8],
+        })?;
+        let mut output = [0.0; 8];
+        let _telemetry = coordinator.poll_and_step(&mut output)?;
+        assert_ne!(initial_checksum, coordinator.weight_checksum());
+        coordinator.restore(&snapshot)?;
+        assert_eq!(initial_checksum, coordinator.weight_checksum());
         Ok(())
     }
 }

@@ -4,7 +4,7 @@
 #![forbid(non_ascii_idents)]
 
 use argon_kernel::{PersistentGridConfig, PlasticityConfig};
-use argon_runtime::{ArgonCoordinator, ControlFrame, TickTelemetry};
+use argon_runtime::{ArgonCoordinator, TickTelemetry};
 use std::slice;
 
 /// Status codes returned across the C-ABI boundary.
@@ -23,6 +23,15 @@ pub enum ArgonStatus {
     RingBufferStateError = -4,
     /// Internal panic caught at the FFI firewall.
     InternalPanic = -99,
+}
+
+/// Current binary ABI version for native callers.
+pub const ARGON_ABI_VERSION: u32 = 1;
+
+/// Returns the binary ABI version implemented by this library.
+#[no_mangle]
+pub const extern "C" fn argon_engine_abi_version() -> u32 {
+    ARGON_ABI_VERSION
 }
 
 /// Opaque C-ABI handle wrapping [`ArgonCoordinator`].
@@ -115,20 +124,9 @@ pub unsafe extern "C" fn argon_engine_step_zero_copy(
         let input_slice = unsafe { slice::from_raw_parts(input_ptr, input_len) };
         let output_slice = unsafe { slice::from_raw_parts_mut(output_ptr, output_len) };
 
-        let frame = ControlFrame {
-            sequence_id,
-            phase_polarity,
-            features: input_slice.to_vec(),
-        };
-
-        engine
-            .coordinator
-            .submit_frame(frame)
-            .map_err(|_| ArgonStatus::RingBufferStateError)?;
-
         let telemetry = engine
             .coordinator
-            .poll_and_step(output_slice)
+            .step_borrowed(sequence_id, phase_polarity, input_slice, output_slice)
             .map_err(|_| ArgonStatus::InvalidConfig)?;
 
         unsafe {

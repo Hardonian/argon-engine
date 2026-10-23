@@ -32,16 +32,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             samples.push(elapsed_nanos(started));
         }
     } else {
-        let features = vec![0.25_f32; TILE_DIM];
+        let mut features = vec![0.25_f32; TILE_DIM];
         let mut output = vec![0.0_f32; TILE_DIM];
         for sequence_id in 0..iterations {
             let started = Instant::now();
             coordinator.submit_frame(ControlFrame {
                 sequence_id: u64::try_from(sequence_id)?,
                 phase_polarity: 1.0,
-                features: features.clone(),
+                features: std::mem::take(&mut features),
             })?;
-            let _telemetry = coordinator.poll_and_step(&mut output)?;
+            let _telemetry = coordinator.poll_and_step_recycle(&mut output, &mut features)?;
             samples.push(elapsed_nanos(started));
         }
     }

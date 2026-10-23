@@ -3,6 +3,9 @@
 
 #![forbid(non_ascii_idents)]
 
+/// High-precision implementation used to validate the real-time `f32` plant.
+pub mod reference;
+
 use argon_runtime::{ArgonCoordinator, ControlFrame, RuntimeError, TickTelemetry};
 use std::fmt;
 
@@ -235,6 +238,25 @@ pub struct CoupledOscillatorMedium {
     homeostasis_cooldown_remaining: u64,
 }
 
+/// Versioned deterministic checkpoint of physical state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediumSnapshot {
+    /// Snapshot format version.
+    pub version: u32,
+    /// Oscillator angular positions.
+    pub positions: Vec<f32>,
+    /// Oscillator angular velocities.
+    pub velocities: Vec<f32>,
+    /// Previously applied torque used by the slew limiter.
+    pub applied_torques: Vec<f32>,
+    /// Next sensory sequence identifier.
+    pub sequence_id: u64,
+    /// Whether energy hysteresis is currently active.
+    pub homeostasis_active: bool,
+    /// Remaining homeostasis cooldown ticks.
+    pub homeostasis_cooldown_remaining: u64,
+}
+
 impl CoupledOscillatorMedium {
     /// Allocates all state and scratch storage required by the real-time loop.
     ///
@@ -277,6 +299,79 @@ impl CoupledOscillatorMedium {
     /// Returns all angular velocities in radians per second.
     pub fn velocities(&self) -> &[f32] {
         &self.velocities
+    }
+
+    /// Captures all physical state needed for deterministic continuation.
+    pub fn snapshot(&self) -> MediumSnapshot {
+        MediumSnapshot {
+            version: 1,
+            positions: self.positions.clone(),
+            velocities: self.velocities.clone(),
+            applied_torques: self.applied_torques.clone(),
+            sequence_id: self.sequence_id,
+            homeostasis_active: self.homeostasis_active,
+            homeostasis_cooldown_remaining: self.homeostasis_cooldown_remaining,
+        }
+    }
+
+    /// Restores a version-one snapshot into preallocated state storage.
+    ///
+    /// # Errors
+    /// Returns [`MediumError`] when the version, dimensions, or values are invalid.
+    pub fn restore(&mut self, snapshot: &MediumSnapshot) -> Result<(), MediumError> {
+        if snapshot.version != 1 {
+            return Err(MediumError::InvalidConfiguration(
+                "unsupported medium snapshot version",
+            ));
+        }
+        let dimension = self.config.dimension;
+        if snapshot.positions.len() != dimension
+            || snapshot.velocities.len() != dimension
+            || snapshot.applied_torques.len() != dimension
+        {
+            return Err(MediumError::InvalidConfiguration(
+                "snapshot dimension does not match medium",
+            ));
+        }
+        if snapshot
+            .positions
+            .iter()
+            .chain(&snapshot.velocities)
+            .chain(&snapshot.applied_torques)
+            .any(|value| !value.is_finite())
+        {
+            return Err(MediumError::InvalidConfiguration(
+                "snapshot state must be finite",
+            ));
+        }
+        self.positions.copy_from_slice(&snapshot.positions);
+        self.velocities.copy_from_slice(&snapshot.velocities);
+        self.applied_torques
+            .copy_from_slice(&snapshot.applied_torques);
+        self.sequence_id = snapshot.sequence_id;
+        self.homeostasis_active = snapshot.homeostasis_active;
+        self.homeostasis_cooldown_remaining = snapshot.homeostasis_cooldown_remaining;
+        Ok(())
+    }
+
+    /// Advances multiple physics substeps under a constant torque vector.
+    ///
+    /// # Errors
+    /// Returns [`MediumError`] if `substeps` is zero or torque validation fails.
+    pub fn advance_substeps(
+        &mut self,
+        torques: &[f32],
+        substeps: usize,
+    ) -> Result<(), MediumError> {
+        if substeps == 0 {
+            return Err(MediumError::InvalidConfiguration(
+                "substeps must be greater than zero",
+            ));
+        }
+        for _ in 0..substeps {
+            self.advance(torques)?;
+        }
+        Ok(())
     }
 
     /// Adds a finite displacement and velocity impulse to one oscillator.
@@ -612,6 +707,53 @@ mod tests {
             "relative error: {}",
             max_error / initial
         );
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_restore_replays_bit_exactly() -> Result<(), MediumError> {
+        let mut first = CoupledOscillatorMedium::new(MediumConfig::default())?;
+        first.perturb(1, 0.7, -0.2)?;
+        let torques = [0.03, -0.02, 0.01, 0.0];
+        first.advance_substeps(&torques, 50)?;
+        let snapshot = first.snapshot();
+        let mut second = CoupledOscillatorMedium::new(MediumConfig::default())?;
+        second.restore(&snapshot)?;
+        first.advance_substeps(&torques, 100)?;
+        second.advance_substeps(&torques, 100)?;
+        assert_eq!(first.positions(), second.positions());
+        assert_eq!(first.velocities(), second.velocities());
+        Ok(())
+    }
+
+    #[test]
+    fn f32_plant_tracks_f64_reference() -> Result<(), MediumError> {
+        let config = MediumConfig::default();
+        let mut production = CoupledOscillatorMedium::new(config)?;
+        production.perturb(0, 0.8, 0.4)?;
+        let mut reference = reference::ReferenceMedium::new(config)?;
+        reference.set_state(&[0.8, 0.0, 0.0, 0.0], &[0.4, 0.0, 0.0, 0.0])?;
+        let torque_f32 = [0.0; 4];
+        let torque_f64 = [0.0; 4];
+        for _ in 0..2_000 {
+            production.advance(&torque_f32)?;
+            reference.advance(&torque_f64)?;
+        }
+        for (&actual, &expected) in production.positions().iter().zip(reference.positions()) {
+            assert!((f64::from(actual) - expected).abs() < 2.0e-5);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pd_controller_opposes_displacement_and_velocity() -> Result<(), MediumError> {
+        let mut controller = PdController::new(4, 2.0, 0.5)?;
+        let mut output = [0.0; 4];
+        controller.control(&[1.0, -1.0, 0.5, 0.0], &[0.2, -0.2, 0.0, 1.0], &mut output)?;
+        let expected = [-2.1, 2.1, -1.0, -0.5];
+        for (&actual, &expected_value) in output.iter().zip(&expected) {
+            assert!((actual - expected_value).abs() < f32::EPSILON * 4.0);
+        }
         Ok(())
     }
 }
