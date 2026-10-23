@@ -168,9 +168,7 @@ mod tests {
     #[test]
     fn test_ffi_lifecycle_and_zero_copy_step() {
         let mut handle: *mut ArgonEngineHandle = ptr::null_mut();
-        let status = unsafe {
-            argon_engine_create(2, 8, 0.03, 2.0, 0.001, 8, &mut handle)
-        };
+        let status = unsafe { argon_engine_create(2, 8, 0.03, 2.0, 0.001, 8, &mut handle) };
         assert_eq!(status, ArgonStatus::Ok);
         assert!(!handle.is_null());
 

@@ -3,9 +3,7 @@
 
 #![forbid(non_ascii_idents)]
 
-use argon_kernel::{
-    KernelError, PersistentGridConfig, PlasticityConfig, SramTileSimulator,
-};
+use argon_kernel::{KernelError, PersistentGridConfig, PlasticityConfig, SramTileSimulator};
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -128,7 +126,9 @@ impl SpscRingBuffer {
 
         let slot_idx = head & self.mask;
         let Some(slot_cell) = self.slots.get(slot_idx) else {
-            return Err(RuntimeError::InvalidConfiguration("Slot index out of bounds"));
+            return Err(RuntimeError::InvalidConfiguration(
+                "Slot index out of bounds",
+            ));
         };
 
         // SAFETY: Only producer writes to `head & mask` when `head - tail < capacity`.
@@ -156,7 +156,9 @@ impl SpscRingBuffer {
 
         let slot_idx = tail & self.mask;
         let Some(slot_cell) = self.slots.get(slot_idx) else {
-            return Err(RuntimeError::InvalidConfiguration("Slot index out of bounds"));
+            return Err(RuntimeError::InvalidConfiguration(
+                "Slot index out of bounds",
+            ));
         };
 
         // SAFETY: Only consumer reads from `tail & mask` when `tail != head`.
@@ -272,7 +274,10 @@ impl ArgonCoordinator {
     ///
     /// # Errors
     /// Returns [`RuntimeError`] if the ring buffer is empty or a kernel step fails.
-    pub fn poll_and_step(&mut self, output_action: &mut [f32]) -> Result<TickTelemetry, RuntimeError> {
+    pub fn poll_and_step(
+        &mut self,
+        output_action: &mut [f32],
+    ) -> Result<TickTelemetry, RuntimeError> {
         if output_action.len() != self.tile_dim {
             return Err(RuntimeError::Kernel(KernelError::DimensionMismatch {
                 expected: self.tile_dim,

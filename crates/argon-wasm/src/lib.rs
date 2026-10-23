@@ -44,8 +44,7 @@ impl WasmLinearArena {
         let total_weights = tile_dim.saturating_mul(tile_dim);
         let mut init_weights = vec![0.02_f32; total_weights];
         for i in 0..tile_dim {
-            if let Some(slot) = init_weights.get_mut(i.saturating_mul(tile_dim).saturating_add(i))
-            {
+            if let Some(slot) = init_weights.get_mut(i.saturating_mul(tile_dim).saturating_add(i)) {
                 *slot = 0.45_f32;
             }
         }
