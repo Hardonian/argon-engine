@@ -10,7 +10,7 @@ Low-level, data-efficient persistent SRAM AI execution engine designed for conti
 - `crates/argon-wasm`: WebAssembly SIMD128 (`wasm32-unknown-unknown`) linear-memory ring-buffer bridge for edge and browser workers.
 - `crates/argon-cli`: Nanosecond latency benchmark harness for coordinator-only and closed-loop physical-medium execution.
 - `crates/argon-io`: Allocation-free physical-device adapter contract and deterministic hardware-in-the-loop emulator.
-- `crates/argon-backend`: Explicit backend abstraction and non-selecting CUDA capability discovery.
+- `crates/argon-backend`: Explicit CPU backend, consumer-GPU inventory, and local-only Ollama, llama.cpp, and OpenAI-compatible model-server client.
 - `kernels/triton`: Persistent in-SRAM Triton micro-kernel with deterministic NumPy fallback.
 - `bindings/ts`: Strict TypeScript orchestration harness (`noImplicitAny`, `noUncheckedIndexedAccess`, zero-copy `Float32Array` views).
 
@@ -29,3 +29,23 @@ Architecture, execution semantics, numerical tolerances, backend qualification,
 and native embedding are documented under `docs/`. CUDA qualification runs only
 on the explicitly labelled self-hosted GPU workflow and is never inferred from
 the presence of kernel source.
+
+## Local-first deployment
+
+Argon is safe to deploy beside a sovereign local model stack: it does not use
+cloud credentials or silently route prompts to a remote service. The built-in
+client only accepts loopback `http://` endpoints by default and supports
+Ollama (`127.0.0.1:11434`), llama.cpp (`127.0.0.1:8080`), and a self-hosted
+OpenAI-compatible server (`127.0.0.1:8000`).
+
+```text
+cargo run -p argon-cli -- inspect --format text
+cargo run -p argon-cli -- doctor --local-stack ollama
+cargo run -p argon-cli -- doctor --local-stack llama-cpp --endpoint http://127.0.0.1:8080
+cargo run -p argon-cli -- complete --local-stack ollama --model qwen3:8b --prompt "Summarize this control trace"
+```
+
+`inspect` reports visible NVIDIA VRAM and a conservative local-model tier;
+`doctor` verifies that the selected server responds; `complete` sends a prompt
+to its native local API. Remote or LAN endpoints are rejected unless
+`--allow-non-loopback` is deliberately supplied.

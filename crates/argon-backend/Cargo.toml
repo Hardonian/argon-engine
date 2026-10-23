@@ -10,6 +10,7 @@ description = "Backend capability discovery and execution abstraction for Argon 
 
 [dependencies]
 argon-runtime = { path = "../argon-runtime", version = "0.1.0" }
+serde_json = "1.0"
 
 [dev-dependencies]
 argon-kernel = { path = "../argon-kernel", version = "0.1.0" }

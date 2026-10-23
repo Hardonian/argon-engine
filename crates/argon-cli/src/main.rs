@@ -2,7 +2,7 @@
 
 #![forbid(non_ascii_idents)]
 
-use argon_backend::CudaCapabilities;
+use argon_backend::{CudaCapabilities, LocalAiStack, LocalHardware, LocalStackKind};
 use argon_ffi::ARGON_ABI_VERSION;
 use argon_kernel::{PersistentGridConfig, PlasticityConfig};
 use argon_medium::{CoupledOscillatorMedium, MediumConfig};
@@ -22,6 +22,8 @@ enum Command {
     Bench,
     Run,
     Inspect,
+    Doctor,
+    Complete,
     Replay,
 }
 
@@ -49,6 +51,12 @@ struct Options {
     scenario: Scenario,
     record: Option<PathBuf>,
     replay: Option<PathBuf>,
+    local_stack: LocalStackKind,
+    endpoint: Option<String>,
+    allow_non_loopback: bool,
+    model: Option<String>,
+    prompt: Option<String>,
+    max_tokens: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,7 +77,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let options = parse_options(&arguments)?;
     match options.command {
-        Command::Inspect => print_inspection(),
+        Command::Inspect => print_inspection(options.format),
+        Command::Doctor => doctor(&options)?,
+        Command::Complete => complete(&options)?,
         Command::Replay => replay(&options)?,
         Command::Bench | Command::Run => {
             let report = execute(&options)?;
@@ -84,33 +94,113 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn print_help() {
     println!(
-        "Usage: argon-cli [bench|run|inspect|replay FILE] [--medium] \
+        "Usage: argon-cli [bench|run|inspect|doctor|complete|replay FILE] [--medium] \
          [--iterations N] [--warmup N] [--scenario equilibrium|shock|sustained] \
-         [--format text|json|csv] [--record FILE] [--config FILE]"
+         [--format text|json|csv] [--record FILE] [--local-stack auto|ollama|llama-cpp|openai-compatible] \
+         [--endpoint http://127.0.0.1:PORT] [--model MODEL] [--prompt TEXT] [--max-tokens N] \
+         [--allow-non-loopback] [--config FILE]"
     );
 }
 
-fn print_inspection() {
+fn print_inspection(format: OutputFormat) {
     let cuda = CudaCapabilities::probe();
+    let hardware = LocalHardware::probe();
     let cuda_devices = cuda
         .as_ref()
         .map_or(0, |capabilities| capabilities.devices.len());
-    println!(
-        "argon_version={} abi_version={} cpu=true wasm=true cuda_devices={cuda_devices} cuda_runtime=false",
-        env!("CARGO_PKG_VERSION"),
-        ARGON_ABI_VERSION
-    );
+    let local_stack = LocalAiStack::discover();
+    match format {
+        OutputFormat::Text => {
+            println!("argon_version={} abi_version={} cpu=true wasm=true cuda_devices={cuda_devices} cuda_runtime=false local_stack={}", env!("CARGO_PKG_VERSION"), ARGON_ABI_VERSION, local_stack.as_ref().map_or("none", |stack| match stack.kind { LocalStackKind::Ollama => "ollama", LocalStackKind::LlamaCpp => "llama-cpp", LocalStackKind::OpenAiCompatible => "openai-compatible", LocalStackKind::Auto => "auto" }));
+            for gpu in &hardware.gpus {
+                println!(
+                    "gpu name={} vram_mib={} tier={:?} guidance={}",
+                    gpu.name,
+                    gpu.memory_mib
+                        .map_or_else(|| "unknown".to_owned(), |memory| memory.to_string()),
+                    gpu.tier,
+                    gpu.tier.guidance()
+                );
+            }
+        }
+        OutputFormat::Json => {
+            println!("{{\"argon_version\":\"{}\",\"abi_version\":{},\"cpu\":true,\"wasm\":true,\"cuda_devices\":{},\"cuda_runtime\":false,\"local_stack\":{},\"gpus\":[{}]}}", env!("CARGO_PKG_VERSION"), ARGON_ABI_VERSION, cuda_devices, local_stack.as_ref().map_or_else(|| "null".to_owned(), |stack| format!("\"{}\"", stack.endpoint.url())), hardware.gpus.iter().map(|gpu| format!("{{\"name\":\"{}\",\"vram_mib\":{},\"tier\":\"{:?}\"}}", gpu.name.replace('"', "\\\""), gpu.memory_mib.map_or_else(|| "null".to_owned(), |memory| memory.to_string()), gpu.tier)).collect::<Vec<_>>().join(","));
+        }
+        OutputFormat::Csv => {
+            println!("name,vram_mib,tier,guidance");
+            for gpu in &hardware.gpus {
+                println!(
+                    "\"{}\",{},\"{:?}\",\"{}\"",
+                    gpu.name.replace('"', "\"\""),
+                    gpu.memory_mib
+                        .map_or_else(String::new, |memory| memory.to_string()),
+                    gpu.tier,
+                    gpu.tier.guidance()
+                );
+            }
+        }
+    }
+}
+
+fn doctor(options: &Options) -> Result<(), Box<dyn Error>> {
+    let stack = selected_stack(options)?;
+    stack.health_check()?;
+    match options.format {
+        OutputFormat::Text => println!(
+            "local_stack=healthy kind={:?} endpoint={}",
+            stack.kind,
+            stack.endpoint.url()
+        ),
+        OutputFormat::Json => println!(
+            "{{\"local_stack\":\"healthy\",\"kind\":\"{:?}\",\"endpoint\":\"{}\"}}",
+            stack.kind,
+            stack.endpoint.url()
+        ),
+        OutputFormat::Csv => {
+            println!("status,kind,endpoint");
+            println!("healthy,{:?},{}", stack.kind, stack.endpoint.url());
+        }
+    }
+    Ok(())
+}
+
+fn complete(options: &Options) -> Result<(), Box<dyn Error>> {
+    let model = options
+        .model
+        .as_deref()
+        .ok_or("complete requires --model MODEL")?;
+    let prompt = options
+        .prompt
+        .as_deref()
+        .ok_or("complete requires --prompt TEXT")?;
+    let stack = selected_stack(options)?;
+    let response = stack.complete(model, prompt, options.max_tokens)?;
+    match options.format {
+        OutputFormat::Text => println!("{response}"),
+        OutputFormat::Json => println!("{{\"response\":{response:?}}}"),
+        OutputFormat::Csv => {
+            println!("response");
+            println!("\"{}\"", response.replace('"', "\"\""));
+        }
+    }
+    Ok(())
+}
+
+fn selected_stack(options: &Options) -> Result<LocalAiStack, Box<dyn Error>> {
+    if options.local_stack == LocalStackKind::Auto {
+        Ok(LocalAiStack::discover()
+            .ok_or("no supported local model server responded on loopback")?)
+    } else {
+        Ok(LocalAiStack::new(
+            options.local_stack,
+            options.endpoint.as_deref(),
+            options.allow_non_loopback,
+        )?)
+    }
 }
 
 fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
-    let mut expanded = arguments.to_vec();
-    if let Some(index) = expanded.iter().position(|argument| argument == "--config") {
-        let path = expanded.get(index + 1).ok_or("--config requires a path")?;
-        let mut from_file = parse_config(Path::new(path))?;
-        expanded.drain(index..=index + 1);
-        from_file.extend(expanded);
-        expanded = from_file;
-    }
+    let expanded = expand_config_arguments(arguments)?;
 
     let mut options = Options {
         command: Command::Bench,
@@ -121,6 +211,12 @@ fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
         scenario: Scenario::Equilibrium,
         record: None,
         replay: None,
+        local_stack: LocalStackKind::Auto,
+        endpoint: None,
+        allow_non_loopback: false,
+        model: None,
+        prompt: None,
+        max_tokens: 256,
     };
     let mut index = 0;
     if let Some(command) = expanded.first().filter(|value| !value.starts_with('-')) {
@@ -128,6 +224,8 @@ fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
             "bench" => Command::Bench,
             "run" => Command::Run,
             "inspect" => Command::Inspect,
+            "doctor" => Command::Doctor,
+            "complete" => Command::Complete,
             "replay" => Command::Replay,
             _ => return Err(format!("unknown command: {command}").into()),
         };
@@ -176,11 +274,46 @@ fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
                 index += 1;
                 options.record = Some(PathBuf::from(value_at(&expanded, index, "--record")?));
             }
+            "--local-stack" => {
+                index += 1;
+                options.local_stack =
+                    LocalStackKind::parse(value_at(&expanded, index, "--local-stack")?)?;
+            }
+            "--endpoint" => {
+                index += 1;
+                options.endpoint = Some(value_at(&expanded, index, "--endpoint")?.to_owned());
+            }
+            "--allow-non-loopback" => options.allow_non_loopback = true,
+            "--model" => {
+                index += 1;
+                options.model = Some(value_at(&expanded, index, "--model")?.to_owned());
+            }
+            "--prompt" => {
+                index += 1;
+                options.prompt = Some(value_at(&expanded, index, "--prompt")?.to_owned());
+            }
+            "--max-tokens" => {
+                index += 1;
+                options.max_tokens =
+                    u32::try_from(parse_positive(&expanded, index, "--max-tokens")?)?;
+            }
             value => return Err(format!("unknown argument: {value}").into()),
         }
         index += 1;
     }
     Ok(options)
+}
+
+fn expand_config_arguments(arguments: &[String]) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut expanded = arguments.to_vec();
+    if let Some(index) = expanded.iter().position(|argument| argument == "--config") {
+        let path = expanded.get(index + 1).ok_or("--config requires a path")?;
+        let mut from_file = parse_config(Path::new(path))?;
+        expanded.drain(index..=index + 1);
+        from_file.extend(expanded);
+        return Ok(from_file);
+    }
+    Ok(expanded)
 }
 
 fn parse_config(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
@@ -372,6 +505,12 @@ fn replay(options: &Options) -> Result<(), Box<dyn Error>> {
         },
         record: None,
         replay: None,
+        local_stack: LocalStackKind::Auto,
+        endpoint: None,
+        allow_non_loopback: false,
+        model: None,
+        prompt: None,
+        max_tokens: 256,
     };
     replay_options.format = OutputFormat::Text;
     let report = execute(&replay_options)?;
