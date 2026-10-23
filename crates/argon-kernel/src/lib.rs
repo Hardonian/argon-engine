@@ -5,6 +5,7 @@
 #![forbid(non_ascii_idents)]
 
 use std::fmt;
+use std::mem::size_of;
 
 /// Error variants emitted by the Argon hardware abstraction layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +77,7 @@ impl PersistentGridConfig {
     ///
     /// # Errors
     /// Returns [`KernelError`] if warp alignment or SRAM limits are violated.
+    #[allow(clippy::manual_is_multiple_of)]
     pub const fn validate(&self) -> Result<(), KernelError> {
         if self.block_dim_x == 0 || (self.block_dim_x % 32) != 0 {
             return Err(KernelError::InvalidHyperparameter(
@@ -150,7 +152,7 @@ impl PlasticityConfig {
 }
 
 /// Static PTX 8.0 assembly template for SM80+ persistent SRAM execution.
-pub const PERSISTENT_PTX_KERNEL_SM80: &str = r#"
+pub const PERSISTENT_PTX_KERNEL_SM80: &str = r"
 .version 8.0
 .target sm_80
 .address_size 64
@@ -228,7 +230,7 @@ KERNEL_EXIT:
     st.global.wb.f32 [%rd6], %f15;
     ret;
 }
-"#;
+";
 
 /// Deterministic CPU/ARM64 simulation state mirroring per-SM SRAM persistence.
 #[repr(align(64))]
@@ -260,7 +262,7 @@ impl SramTileSimulator {
 
         let required_bytes = expected_len
             .saturating_add(grid_config.tile_dim)
-            .saturating_mul(std::mem::size_of::<f32>());
+            .saturating_mul(size_of::<f32>());
         if required_bytes > grid_config.shared_mem_bytes as usize {
             return Err(KernelError::SramCapacityExceeded {
                 requested_bytes: required_bytes,

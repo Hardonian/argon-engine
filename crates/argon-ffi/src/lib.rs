@@ -168,7 +168,8 @@ mod tests {
     #[test]
     fn test_ffi_lifecycle_and_zero_copy_step() {
         let mut handle: *mut ArgonEngineHandle = ptr::null_mut();
-        let status = unsafe { argon_engine_create(2, 8, 0.03, 2.0, 0.001, 8, &mut handle) };
+        // Uses &raw mut to comply with clippy::borrow_as_ptr in Rust 1.82+ and 1.96+
+        let status = unsafe { argon_engine_create(2, 8, 0.03, 2.0, 0.001, 8, &raw mut handle) };
         assert_eq!(status, ArgonStatus::Ok);
         assert!(!handle.is_null());
 
@@ -190,7 +191,7 @@ mod tests {
                 input.len(),
                 output.as_mut_ptr(),
                 output.len(),
-                &mut telemetry,
+                &raw mut telemetry,
             )
         };
         assert_eq!(step_status, ArgonStatus::Ok);

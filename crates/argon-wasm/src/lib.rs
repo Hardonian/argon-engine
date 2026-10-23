@@ -1,6 +1,6 @@
 //! Zero-serialization WebAssembly (`wasm32-unknown-unknown`) linear-memory bridge
 //! with hardware SIMD128 acceleration when compiled for WASM targets and portable
-//! 4-lane vector unrolling on native ARM64 / x86_64 hosts.
+//! 4-lane vector unrolling on native ARM64 / `x86_64` hosts.
 
 #![forbid(non_ascii_idents)]
 
@@ -60,11 +60,13 @@ impl WasmLinearArena {
     }
 
     /// Returns a mutable pointer to the input buffer in linear memory for zero-copy JS `Float32Array` writes.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn input_mut_ptr(&mut self) -> *mut f32 {
         self.input_buffer.as_mut_ptr()
     }
 
     /// Returns a const pointer to the output buffer in linear memory for zero-copy JS `Float32Array` reads.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn output_ptr(&self) -> *const f32 {
         self.output_buffer.as_ptr()
     }
@@ -93,8 +95,12 @@ impl WasmLinearArena {
     }
 
     /// Computes a 4-lane unrolled dot product (WASM SIMD128 compatible layout).
+    ///
+    /// # Errors
+    /// Returns [`KernelError::DimensionMismatch`] if slice lengths differ or are not multiples of 4.
+    #[allow(clippy::manual_is_multiple_of)]
     pub fn simd4_dot_product(a: &[f32], b: &[f32]) -> Result<f32, KernelError> {
-        if a.len() != b.len() || a.len() % 4 != 0 {
+        if a.len() != b.len() || (a.len() % 4) != 0 {
             return Err(KernelError::DimensionMismatch {
                 expected: a.len(),
                 actual: b.len(),
