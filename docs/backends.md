@@ -22,8 +22,8 @@ conservative tiers: under 6 GiB (small quantized models), 6–11 GiB (7B/8B
 quantized), 12–23 GiB (8B–14B quantized), and 24 GiB or more (larger quantized
 models and longer contexts).
 
-`argon-backend::LocalAiStack` connects to Ollama, llama.cpp, and self-hosted
-OpenAI-compatible APIs. It accepts only `http://` loopback URLs by default,
+`argon-backend::LocalAiStack` connects to Ollama, llama.cpp, LM Studio, and
+self-hosted OpenAI-compatible APIs. It accepts only `http://` loopback URLs by default,
 uses no cloud API key, and does not start or download models. A caller must
 explicitly opt in before using a LAN or remote endpoint. This keeps model data,
 prompts, and inference traffic local unless the embedding application makes a

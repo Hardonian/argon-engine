@@ -35,17 +35,19 @@ the presence of kernel source.
 Argon is safe to deploy beside a sovereign local model stack: it does not use
 cloud credentials or silently route prompts to a remote service. The built-in
 client only accepts loopback `http://` endpoints by default and supports
-Ollama (`127.0.0.1:11434`), llama.cpp (`127.0.0.1:8080`), and a self-hosted
-OpenAI-compatible server (`127.0.0.1:8000`).
+Ollama (`127.0.0.1:11434`), llama.cpp (`127.0.0.1:8080`), LM Studio
+(`127.0.0.1:1234`), and a self-hosted OpenAI-compatible server
+(`127.0.0.1:8000`).
 
 ```text
 cargo run -p argon-cli -- inspect --format text
 cargo run -p argon-cli -- doctor --local-stack ollama
 cargo run -p argon-cli -- doctor --local-stack llama-cpp --endpoint http://127.0.0.1:8080
+cargo run -p argon-cli -- models --local-stack lm-studio
 cargo run -p argon-cli -- complete --local-stack ollama --model qwen3:8b --prompt "Summarize this control trace"
 ```
 
 `inspect` reports visible NVIDIA VRAM and a conservative local-model tier;
-`doctor` verifies that the selected server responds; `complete` sends a prompt
-to its native local API. Remote or LAN endpoints are rejected unless
+`doctor` verifies that the selected server responds; `models` lists available
+models; and `complete` sends a prompt to its native local API. Remote or LAN endpoints are rejected unless
 `--allow-non-loopback` is deliberately supplied.

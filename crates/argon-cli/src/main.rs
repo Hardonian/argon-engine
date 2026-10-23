@@ -23,6 +23,7 @@ enum Command {
     Run,
     Inspect,
     Doctor,
+    Models,
     Complete,
     Replay,
 }
@@ -79,6 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     match options.command {
         Command::Inspect => print_inspection(options.format),
         Command::Doctor => doctor(&options)?,
+        Command::Models => list_models(&options)?,
         Command::Complete => complete(&options)?,
         Command::Replay => replay(&options)?,
         Command::Bench | Command::Run => {
@@ -94,9 +96,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn print_help() {
     println!(
-        "Usage: argon-cli [bench|run|inspect|doctor|complete|replay FILE] [--medium] \
+        "Usage: argon-cli [bench|run|inspect|doctor|models|complete|replay FILE] [--medium] \
          [--iterations N] [--warmup N] [--scenario equilibrium|shock|sustained] \
-         [--format text|json|csv] [--record FILE] [--local-stack auto|ollama|llama-cpp|openai-compatible] \
+         [--format text|json|csv] [--record FILE] [--local-stack auto|ollama|llama-cpp|lm-studio|openai-compatible] \
          [--endpoint http://127.0.0.1:PORT] [--model MODEL] [--prompt TEXT] [--max-tokens N] \
          [--allow-non-loopback] [--config FILE]"
     );
@@ -111,7 +113,7 @@ fn print_inspection(format: OutputFormat) {
     let local_stack = LocalAiStack::discover();
     match format {
         OutputFormat::Text => {
-            println!("argon_version={} abi_version={} cpu=true wasm=true cuda_devices={cuda_devices} cuda_runtime=false local_stack={}", env!("CARGO_PKG_VERSION"), ARGON_ABI_VERSION, local_stack.as_ref().map_or("none", |stack| match stack.kind { LocalStackKind::Ollama => "ollama", LocalStackKind::LlamaCpp => "llama-cpp", LocalStackKind::OpenAiCompatible => "openai-compatible", LocalStackKind::Auto => "auto" }));
+            println!("argon_version={} abi_version={} cpu=true wasm=true cuda_devices={cuda_devices} cuda_runtime=false local_stack={}", env!("CARGO_PKG_VERSION"), ARGON_ABI_VERSION, local_stack.as_ref().map_or("none", |stack| match stack.kind { LocalStackKind::Ollama => "ollama", LocalStackKind::LlamaCpp => "llama-cpp", LocalStackKind::LmStudio => "lm-studio", LocalStackKind::OpenAiCompatible => "openai-compatible", LocalStackKind::Auto => "auto" }));
             for gpu in &hardware.gpus {
                 println!(
                     "gpu name={} vram_mib={} tier={:?} guidance={}",
@@ -164,6 +166,25 @@ fn doctor(options: &Options) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn list_models(options: &Options) -> Result<(), Box<dyn Error>> {
+    let models = selected_stack(options)?.list_models()?;
+    match options.format {
+        OutputFormat::Text => {
+            for model in &models {
+                println!("{model}");
+            }
+        }
+        OutputFormat::Json => println!("{models:?}"),
+        OutputFormat::Csv => {
+            println!("model");
+            for model in &models {
+                println!("\"{}\"", model.replace('"', "\"\""));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn complete(options: &Options) -> Result<(), Box<dyn Error>> {
     let model = options
         .model
@@ -202,22 +223,8 @@ fn selected_stack(options: &Options) -> Result<LocalAiStack, Box<dyn Error>> {
 fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
     let expanded = expand_config_arguments(arguments)?;
 
-    let mut options = Options {
-        command: Command::Bench,
-        medium: false,
-        iterations: DEFAULT_ITERATIONS,
-        warmup: DEFAULT_WARMUP,
-        format: OutputFormat::Text,
-        scenario: Scenario::Equilibrium,
-        record: None,
-        replay: None,
-        local_stack: LocalStackKind::Auto,
-        endpoint: None,
-        allow_non_loopback: false,
-        model: None,
-        prompt: None,
-        max_tokens: 256,
-    };
+    let mut options = default_options();
+
     let mut index = 0;
     if let Some(command) = expanded.first().filter(|value| !value.starts_with('-')) {
         options.command = match command.as_str() {
@@ -225,6 +232,7 @@ fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
             "run" => Command::Run,
             "inspect" => Command::Inspect,
             "doctor" => Command::Doctor,
+            "models" => Command::Models,
             "complete" => Command::Complete,
             "replay" => Command::Replay,
             _ => return Err(format!("unknown command: {command}").into()),
@@ -302,6 +310,25 @@ fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
         index += 1;
     }
     Ok(options)
+}
+
+const fn default_options() -> Options {
+    Options {
+        command: Command::Bench,
+        medium: false,
+        iterations: DEFAULT_ITERATIONS,
+        warmup: DEFAULT_WARMUP,
+        format: OutputFormat::Text,
+        scenario: Scenario::Equilibrium,
+        record: None,
+        replay: None,
+        local_stack: LocalStackKind::Auto,
+        endpoint: None,
+        allow_non_loopback: false,
+        model: None,
+        prompt: None,
+        max_tokens: 256,
+    }
 }
 
 fn expand_config_arguments(arguments: &[String]) -> Result<Vec<String>, Box<dyn Error>> {

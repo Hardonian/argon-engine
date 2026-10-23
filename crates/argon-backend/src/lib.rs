@@ -80,6 +80,8 @@ pub enum LocalStackKind {
     Ollama,
     /// llama.cpp's OpenAI-compatible `/completion` API.
     LlamaCpp,
+    /// LM Studio's OpenAI-compatible local server.
+    LmStudio,
     /// A self-hosted OpenAI-compatible `/v1/chat/completions` API.
     OpenAiCompatible,
 }
@@ -94,6 +96,7 @@ impl LocalStackKind {
             "auto" => Ok(Self::Auto),
             "ollama" => Ok(Self::Ollama),
             "llama.cpp" | "llama-cpp" | "llamacpp" => Ok(Self::LlamaCpp),
+            "lm-studio" | "lmstudio" => Ok(Self::LmStudio),
             "openai-compatible" | "openai" => Ok(Self::OpenAiCompatible),
             _ => Err(LocalStackError::InvalidStack(value.to_owned())),
         }
@@ -105,6 +108,7 @@ impl LocalStackKind {
             Self::Auto => None,
             Self::Ollama => Some("http://127.0.0.1:11434"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080"),
+            Self::LmStudio => Some("http://127.0.0.1:1234"),
             Self::OpenAiCompatible => Some("http://127.0.0.1:8000"),
         }
     }
@@ -239,12 +243,17 @@ impl LocalEndpoint {
             .map_err(|error| LocalStackError::Transport(error.to_string()))?;
         let mut response = String::new();
         stream
+            .take(16 * 1024 * 1024)
             .read_to_string(&mut response)
             .map_err(|error| LocalStackError::Transport(error.to_string()))?;
         let (head, body) = response
             .split_once("\r\n\r\n")
             .ok_or_else(|| LocalStackError::Protocol("malformed HTTP response".to_owned()))?;
-        if !head.starts_with("HTTP/1.") || !head.contains(" 2") {
+        let status = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|value| value.parse::<u16>().ok());
+        if !matches!(status, Some(200..=299)) {
             return Err(LocalStackError::Protocol(
                 head.lines()
                     .next()
@@ -297,6 +306,7 @@ impl LocalAiStack {
         for kind in [
             LocalStackKind::Ollama,
             LocalStackKind::LlamaCpp,
+            LocalStackKind::LmStudio,
             LocalStackKind::OpenAiCompatible,
         ] {
             let stack = Self::new(kind, None, false).ok()?;
@@ -315,11 +325,64 @@ impl LocalAiStack {
     pub fn health_check(&self) -> Result<(), LocalStackError> {
         let path = match self.kind {
             LocalStackKind::Ollama => "/api/tags",
-            LocalStackKind::LlamaCpp | LocalStackKind::OpenAiCompatible => "/v1/models",
+            LocalStackKind::LlamaCpp
+            | LocalStackKind::LmStudio
+            | LocalStackKind::OpenAiCompatible => "/v1/models",
             LocalStackKind::Auto => return Err(LocalStackError::InvalidStack("auto".to_owned())),
         };
         let _response = self.endpoint.request("GET", path, None)?;
         Ok(())
+    }
+
+    /// Lists installed or served model identifiers without generating text.
+    ///
+    /// # Errors
+    /// Returns [`LocalStackError`] when the local server cannot be reached or
+    /// its model-list response is not recognized.
+    pub fn list_models(&self) -> Result<Vec<String>, LocalStackError> {
+        let response = match self.kind {
+            LocalStackKind::Ollama => self.endpoint.request("GET", "/api/tags", None)?,
+            LocalStackKind::LlamaCpp
+            | LocalStackKind::LmStudio
+            | LocalStackKind::OpenAiCompatible => {
+                self.endpoint.request("GET", "/v1/models", None)?
+            }
+            LocalStackKind::Auto => return Err(LocalStackError::InvalidStack("auto".to_owned())),
+        };
+        let models = if self.kind == LocalStackKind::Ollama {
+            response
+                .get("models")
+                .and_then(Value::as_array)
+                .map(|models| {
+                    models
+                        .iter()
+                        .filter_map(|model| {
+                            model
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
+                        })
+                        .collect()
+                })
+        } else {
+            response
+                .get("data")
+                .and_then(Value::as_array)
+                .map(|models| {
+                    models
+                        .iter()
+                        .filter_map(|model| {
+                            model
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .map(ToOwned::to_owned)
+                        })
+                        .collect()
+                })
+        };
+        models.ok_or_else(|| {
+            LocalStackError::Protocol("model list has an unexpected JSON shape".to_owned())
+        })
     }
 
     /// Generates a completion using the local stack's native HTTP API.
@@ -342,7 +405,7 @@ impl LocalAiStack {
                 "/completion",
                 json!({"prompt": prompt, "n_predict": max_tokens}),
             ),
-            LocalStackKind::OpenAiCompatible => (
+            LocalStackKind::LmStudio | LocalStackKind::OpenAiCompatible => (
                 "/v1/chat/completions",
                 json!({"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens, "stream": false}),
             ),
@@ -354,7 +417,7 @@ impl LocalAiStack {
         let text = match self.kind {
             LocalStackKind::Ollama => response.get("response").and_then(Value::as_str),
             LocalStackKind::LlamaCpp => response.get("content").and_then(Value::as_str),
-            LocalStackKind::OpenAiCompatible => response
+            LocalStackKind::LmStudio | LocalStackKind::OpenAiCompatible => response
                 .get("choices")
                 .and_then(Value::as_array)
                 .and_then(|choices| choices.first())
@@ -499,6 +562,8 @@ impl LocalHardware {
 mod tests {
     use super::*;
     use argon_kernel::{PersistentGridConfig, PlasticityConfig};
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn cpu_backend_executes_borrowed_tick() -> Result<(), RuntimeError> {
@@ -545,5 +610,57 @@ mod tests {
             GpuDevice::with_memory("24 GB".to_owned(), Some(24_576), None).tier,
             ConsumerGpuTier::HighMemory
         );
+    }
+
+    #[test]
+    fn openai_compatible_stack_lists_models_and_completes() -> Result<(), LocalStackError> {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .map_err(|error| LocalStackError::Transport(error.to_string()))?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| LocalStackError::Transport(error.to_string()))?
+            .port();
+        let server = thread::spawn(move || -> Result<(), LocalStackError> {
+            for _ in 0..3 {
+                let (mut stream, _) = listener
+                    .accept()
+                    .map_err(|error| LocalStackError::Transport(error.to_string()))?;
+                let mut request = [0_u8; 8_192];
+                let bytes = stream
+                    .read(&mut request)
+                    .map_err(|error| LocalStackError::Transport(error.to_string()))?;
+                let request = String::from_utf8_lossy(&request[..bytes]);
+                let body = if request.starts_with("GET /v1/models ") {
+                    r#"{"data":[{"id":"local-test-model"}]}"#
+                } else if request.starts_with("POST /v1/chat/completions ") {
+                    r#"{"choices":[{"message":{"content":"local response"}}]}"#
+                } else {
+                    r#"{"error":"unexpected route"}"#
+                };
+                let response = format!(
+                    "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .map_err(|error| LocalStackError::Transport(error.to_string()))?;
+            }
+            Ok(())
+        });
+        let stack = LocalAiStack::new(
+            LocalStackKind::OpenAiCompatible,
+            Some(&format!("http://127.0.0.1:{port}")),
+            false,
+        )?;
+        stack.health_check()?;
+        assert_eq!(stack.list_models()?, ["local-test-model"]);
+        assert_eq!(
+            stack.complete("local-test-model", "hello", 16)?,
+            "local response"
+        );
+        server
+            .join()
+            .map_err(|_| LocalStackError::Transport("test server panicked".to_owned()))??;
+        Ok(())
     }
 }

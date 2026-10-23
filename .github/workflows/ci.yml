@@ -43,6 +43,10 @@ jobs:
       - name: Execute Workspace Unit & Integration Tests
         run: cargo test --workspace --all-features -- --nocapture
 
+      - name: Build Public API Documentation
+        run: cargo doc --workspace --all-features --no-deps
+        if: runner.os == 'Linux'
+
       - name: Verify WASM Target Compilation
         run: cargo build -p argon-wasm --target wasm32-unknown-unknown --release
         if: runner.os == 'Linux'
@@ -69,7 +73,7 @@ jobs:
       - name: Install & Verify TypeScript Bindings
         working-directory: bindings/ts
         run: |
-          npm install
+          npm ci
           npm run typecheck
           npm run build
           npm test
