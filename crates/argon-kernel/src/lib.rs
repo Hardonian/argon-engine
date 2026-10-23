@@ -369,6 +369,37 @@ impl SramTileSimulator {
     pub const fn cumulative_steps(&self) -> u64 {
         self.cumulative_steps
     }
+
+    /// Rescales the resident synaptic weights to a requested L2 norm.
+    ///
+    /// This is the local synaptic-scaling operation used by runtime
+    /// homeostasis. A zero-norm tile is left unchanged because it has no
+    /// direction that can be preserved by rescaling.
+    ///
+    /// # Errors
+    /// Returns [`KernelError::InvalidHyperparameter`] when `target_norm` is
+    /// not finite or is not strictly positive.
+    pub fn scale_weights_to_norm(&mut self, target_norm: f32) -> Result<(), KernelError> {
+        if !target_norm.is_finite() || target_norm <= 0.0 {
+            return Err(KernelError::InvalidHyperparameter(
+                "homeostatic target_norm must be finite and strictly positive",
+            ));
+        }
+
+        let mut norm_sq = 0.0_f32;
+        for &weight in &self.sram_weights {
+            norm_sq = weight.mul_add(weight, norm_sq);
+        }
+        if norm_sq <= f32::EPSILON {
+            return Ok(());
+        }
+
+        let scale = target_norm / norm_sq.sqrt();
+        for weight in &mut self.sram_weights {
+            *weight *= scale;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

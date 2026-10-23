@@ -1,0 +1,15 @@
+[package]
+name = "argon-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Nanosecond latency benchmark harness for the Argon execution engine."
+
+[dependencies]
+argon-kernel = { path = "../argon-kernel" }
+argon-medium = { path = "../argon-medium" }
+argon-runtime = { path = "../argon-runtime" }
+
+[lints]
+workspace = true

@@ -112,13 +112,13 @@ impl WasmLinearArena {
         let mut acc2 = 0.0_f32;
         let mut acc3 = 0.0_f32;
 
-        for (chunk_a, chunk_b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
-            if let ([a0, a1, a2, a3], [b0, b1, b2, b3]) = (chunk_a, chunk_b) {
-                acc0 = a0.mul_add(*b0, acc0);
-                acc1 = a1.mul_add(*b1, acc1);
-                acc2 = a2.mul_add(*b2, acc2);
-                acc3 = a3.mul_add(*b3, acc3);
-            }
+        for (&[a0, a1, a2, a3], &[b0, b1, b2, b3]) in
+            a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0)
+        {
+            acc0 = a0.mul_add(b0, acc0);
+            acc1 = a1.mul_add(b1, acc1);
+            acc2 = a2.mul_add(b2, acc2);
+            acc3 = a3.mul_add(b3, acc3);
         }
 
         Ok((acc0 + acc1) + (acc2 + acc3))

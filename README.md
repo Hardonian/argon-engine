@@ -5,7 +5,9 @@ Low-level, data-efficient persistent SRAM AI execution engine designed for conti
 ## Workspace Layout
 - `crates/argon-kernel`: Bare-metal PTX 8.0 persistent kernel emitter and cache-line-aligned (`#[repr(align(64))]`) ARM64/CPU deterministic SRAM simulator.
 - `crates/argon-runtime`: Lock-free Single-Producer Single-Consumer (`SpscRingBuffer`) memory allocator and multi-layer Forward-Forward / Hebbian coordinator.
+- `crates/argon-medium`: Cache-line-aligned coupled-oscillator plant with allocation-free symplectic integration and sensory-motor coordinator coupling.
 - `crates/argon-ffi`: Panic-safe C-ABI boundary (`cdylib`/`rlib`) for zero-copy native orchestration.
 - `crates/argon-wasm`: WebAssembly SIMD128 (`wasm32-unknown-unknown`) linear-memory ring-buffer bridge for edge and browser workers.
+- `crates/argon-cli`: Nanosecond latency benchmark harness for coordinator-only and closed-loop physical-medium execution.
 - `kernels/triton`: Persistent in-SRAM Triton micro-kernel with deterministic NumPy fallback.
 - `bindings/ts`: Strict TypeScript orchestration harness (`noImplicitAny`, `noUncheckedIndexedAccess`, zero-copy `Float32Array` views).

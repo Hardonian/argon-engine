@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "argon-cli"
+version = "0.1.0"
+dependencies = [
+ "argon-kernel",
+ "argon-medium",
+ "argon-runtime",
+]
+
+[[package]]
 name = "argon-ffi"
 version = "0.1.0"
 dependencies = [
@@ -13,6 +22,14 @@ dependencies = [
 [[package]]
 name = "argon-kernel"
 version = "0.1.0"
+
+[[package]]
+name = "argon-medium"
+version = "0.1.0"
+dependencies = [
+ "argon-kernel",
+ "argon-runtime",
+]
 
 [[package]]
 name = "argon-runtime"

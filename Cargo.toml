@@ -3,8 +3,10 @@ resolver = "2"
 members = [
     "crates/argon-kernel",
     "crates/argon-runtime",
+    "crates/argon-medium",
     "crates/argon-ffi",
     "crates/argon-wasm",
+    "crates/argon-cli",
 ]
 
 [workspace.package]

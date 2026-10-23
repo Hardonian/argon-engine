@@ -270,6 +270,11 @@ impl ArgonCoordinator {
         self.ring_buffer.try_push(frame)
     }
 
+    /// Returns the sensory and action dimension expected by this coordinator.
+    pub const fn tile_dim(&self) -> usize {
+        self.tile_dim
+    }
+
     /// Drains and executes a single frame from the ingress ring buffer across all resident SRAM tiles.
     ///
     /// # Errors
@@ -278,6 +283,23 @@ impl ArgonCoordinator {
         &mut self,
         output_action: &mut [f32],
     ) -> Result<TickTelemetry, RuntimeError> {
+        let mut discarded_features = Vec::new();
+        self.poll_and_step_recycle(output_action, &mut discarded_features)
+    }
+
+    /// Drains and executes one frame, returning its feature allocation to the caller.
+    ///
+    /// Swapping the consumed frame's feature vector into `recycled_features`
+    /// lets real-time producers reuse the same allocation on their next tick.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] if the ring buffer is empty, dimensions do not
+    /// match, or a kernel step fails.
+    pub fn poll_and_step_recycle(
+        &mut self,
+        output_action: &mut [f32],
+        recycled_features: &mut Vec<f32>,
+    ) -> Result<TickTelemetry, RuntimeError> {
         if output_action.len() != self.tile_dim {
             return Err(RuntimeError::Kernel(KernelError::DimensionMismatch {
                 expected: self.tile_dim,
@@ -285,11 +307,12 @@ impl ArgonCoordinator {
             }));
         }
 
-        let frame = self.ring_buffer.try_pop()?;
+        let mut frame = self.ring_buffer.try_pop()?;
         let mut step_plasticity = self.base_plasticity;
         step_plasticity.phase_polarity = frame.phase_polarity;
 
         self.scratch_a.copy_from_slice(&frame.features);
+        std::mem::swap(recycled_features, &mut frame.features);
         let mut total_goodness = 0.0_f32;
 
         for (layer_idx, tile) in self.tiles.iter_mut().enumerate() {
@@ -323,6 +346,17 @@ impl ArgonCoordinator {
             output_l2_norm: l2_sq.sqrt(),
             total_ticks: self.total_ticks,
         })
+    }
+
+    /// Applies local homeostatic synaptic scaling to every resident tile.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] when the target norm is invalid.
+    pub fn apply_homeostasis(&mut self, target_norm: f32) -> Result<(), RuntimeError> {
+        for tile in &mut self.tiles {
+            tile.scale_weights_to_norm(target_norm)?;
+        }
+        Ok(())
     }
 }
 
