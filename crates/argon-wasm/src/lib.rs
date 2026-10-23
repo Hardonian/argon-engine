@@ -6,6 +6,18 @@
 
 use argon_kernel::{KernelError, PersistentGridConfig, PlasticityConfig, SramTileSimulator};
 
+/// Status returned by the raw WebAssembly ABI.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WasmStatus {
+    /// Operation completed successfully.
+    Ok = 0,
+    /// A required arena pointer was null.
+    NullPointer = -1,
+    /// Configuration or phase polarity was invalid.
+    InvalidConfiguration = -2,
+}
+
 /// Fixed-capacity linear-memory arena enabling JavaScript `Float32Array` views
 /// over WebAssembly `SharedArrayBuffer` memory without serialization copies.
 pub struct WasmLinearArena {
@@ -14,6 +26,100 @@ pub struct WasmLinearArena {
     output_buffer: Vec<f32>,
     simulator: SramTileSimulator,
     plasticity: PlasticityConfig,
+}
+
+/// Allocates a raw linear-memory arena and returns null on invalid configuration.
+#[no_mangle]
+pub extern "C" fn argon_wasm_create(
+    tile_dim: usize,
+    learning_rate: f32,
+    goodness_threshold: f32,
+    weight_decay: f32,
+) -> *mut WasmLinearArena {
+    WasmLinearArena::new(tile_dim, learning_rate, goodness_threshold, weight_decay)
+        .map_or(std::ptr::null_mut(), |arena| Box::into_raw(Box::new(arena)))
+}
+
+/// Returns the input-buffer offset in WebAssembly linear memory.
+///
+/// # Safety
+/// `arena` must be null or a live pointer returned by [`argon_wasm_create`].
+#[no_mangle]
+pub unsafe extern "C" fn argon_wasm_input_ptr(arena: *mut WasmLinearArena) -> *mut f32 {
+    if arena.is_null() {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: Pointer validity is guaranteed by the caller.
+    unsafe { (&mut *arena).input_mut_ptr() }
+}
+
+/// Returns the output-buffer offset in WebAssembly linear memory.
+///
+/// # Safety
+/// `arena` must be null or a live pointer returned by [`argon_wasm_create`].
+#[no_mangle]
+pub unsafe extern "C" fn argon_wasm_output_ptr(arena: *const WasmLinearArena) -> *const f32 {
+    if arena.is_null() {
+        return std::ptr::null();
+    }
+    // SAFETY: Pointer validity is guaranteed by the caller.
+    unsafe { (&*arena).output_ptr() }
+}
+
+/// Executes one in-place arena tick.
+///
+/// # Safety
+/// `arena` must be a live pointer returned by [`argon_wasm_create`].
+#[no_mangle]
+pub unsafe extern "C" fn argon_wasm_step(
+    arena: *mut WasmLinearArena,
+    phase_polarity: f32,
+    goodness_out: *mut f32,
+) -> WasmStatus {
+    if arena.is_null() || goodness_out.is_null() {
+        return WasmStatus::NullPointer;
+    }
+    // SAFETY: Both pointers were checked and their validity is guaranteed by the caller.
+    unsafe { (&mut *arena).step_in_place(phase_polarity) }.map_or(
+        WasmStatus::InvalidConfiguration,
+        |goodness| {
+            // SAFETY: `goodness_out` is non-null and caller-owned.
+            unsafe { *goodness_out = goodness };
+            WasmStatus::Ok
+        },
+    )
+}
+
+/// Executes one tick and returns goodness directly, or `NaN` on error.
+///
+/// This convenience export avoids requiring JavaScript callers to allocate a
+/// scalar inside WebAssembly memory.
+///
+/// # Safety
+/// `arena` must be a live pointer returned by [`argon_wasm_create`].
+#[no_mangle]
+pub unsafe extern "C" fn argon_wasm_step_value(
+    arena: *mut WasmLinearArena,
+    phase_polarity: f32,
+) -> f32 {
+    if arena.is_null() {
+        return f32::NAN;
+    }
+    // SAFETY: Pointer validity is guaranteed by the caller.
+    unsafe { (&mut *arena).step_in_place(phase_polarity) }.unwrap_or(f32::NAN)
+}
+
+/// Frees a raw arena. Passing null is permitted.
+///
+/// # Safety
+/// A non-null pointer must have been returned by [`argon_wasm_create`] and not
+/// previously destroyed.
+#[no_mangle]
+pub unsafe extern "C" fn argon_wasm_destroy(arena: *mut WasmLinearArena) {
+    if !arena.is_null() {
+        // SAFETY: Ownership requirements are guaranteed by the caller.
+        unsafe { drop(Box::from_raw(arena)) };
+    }
 }
 
 impl WasmLinearArena {

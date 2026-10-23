@@ -1,0 +1,22 @@
+[package]
+name = "argon-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+argon-kernel = { path = "../crates/argon-kernel" }
+argon-runtime = { path = "../crates/argon-runtime" }
+
+[[bin]]
+name = "runtime_frames"
+path = "fuzz_targets/runtime_frames.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

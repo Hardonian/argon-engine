@@ -1,59 +1,388 @@
-//! Command-line latency benchmark for Argon coordinator and physical-medium loops.
+//! Reproducible run, benchmark, inspect, and replay CLI for Argon Engine.
 
 #![forbid(non_ascii_idents)]
 
+use argon_backend::CudaCapabilities;
+use argon_ffi::ARGON_ABI_VERSION;
 use argon_kernel::{PersistentGridConfig, PlasticityConfig};
 use argon_medium::{CoupledOscillatorMedium, MediumConfig};
 use argon_runtime::{ArgonCoordinator, ControlFrame};
 use std::env;
 use std::error::Error;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 const DEFAULT_ITERATIONS: usize = 10_000;
+const DEFAULT_WARMUP: usize = 1_000;
 const TILE_DIM: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Command {
+    Bench,
+    Run,
+    Inspect,
+    Replay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputFormat {
+    Text,
+    Json,
+    Csv,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scenario {
+    Equilibrium,
+    Shock,
+    Sustained,
+}
+
+#[derive(Debug)]
+struct Options {
+    command: Command,
+    medium: bool,
+    iterations: usize,
+    warmup: usize,
+    format: OutputFormat,
+    scenario: Scenario,
+    record: Option<PathBuf>,
+    replay: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Report {
+    iterations: usize,
+    p50: u64,
+    p95: u64,
+    p99: u64,
+    final_energy: f32,
+    weight_checksum: u64,
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments: Vec<String> = env::args().skip(1).collect();
     if arguments.iter().any(|argument| argument == "--help") {
-        println!("Usage: argon-cli [--medium] [--iterations N]");
+        print_help();
         return Ok(());
     }
-    let iterations = parse_iterations(&arguments)?;
-    let with_medium = arguments.iter().any(|argument| argument == "--medium");
-    let mut coordinator = coordinator()?;
-    let mut samples = Vec::with_capacity(iterations);
+    let options = parse_options(&arguments)?;
+    match options.command {
+        Command::Inspect => print_inspection(),
+        Command::Replay => replay(&options)?,
+        Command::Bench | Command::Run => {
+            let report = execute(&options)?;
+            print_report(&options, report);
+            if let Some(path) = &options.record {
+                write_recording(path, &options, report)?;
+            }
+        }
+    }
+    Ok(())
+}
 
-    if with_medium {
+fn print_help() {
+    println!(
+        "Usage: argon-cli [bench|run|inspect|replay FILE] [--medium] \
+         [--iterations N] [--warmup N] [--scenario equilibrium|shock|sustained] \
+         [--format text|json|csv] [--record FILE] [--config FILE]"
+    );
+}
+
+fn print_inspection() {
+    let cuda = CudaCapabilities::probe();
+    let cuda_devices = cuda
+        .as_ref()
+        .map_or(0, |capabilities| capabilities.devices.len());
+    println!(
+        "argon_version={} abi_version={} cpu=true wasm=true cuda_devices={cuda_devices} cuda_runtime=false",
+        env!("CARGO_PKG_VERSION"),
+        ARGON_ABI_VERSION
+    );
+}
+
+fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
+    let mut expanded = arguments.to_vec();
+    if let Some(index) = expanded.iter().position(|argument| argument == "--config") {
+        let path = expanded.get(index + 1).ok_or("--config requires a path")?;
+        let mut from_file = parse_config(Path::new(path))?;
+        expanded.drain(index..=index + 1);
+        from_file.extend(expanded);
+        expanded = from_file;
+    }
+
+    let mut options = Options {
+        command: Command::Bench,
+        medium: false,
+        iterations: DEFAULT_ITERATIONS,
+        warmup: DEFAULT_WARMUP,
+        format: OutputFormat::Text,
+        scenario: Scenario::Equilibrium,
+        record: None,
+        replay: None,
+    };
+    let mut index = 0;
+    if let Some(command) = expanded.first().filter(|value| !value.starts_with('-')) {
+        options.command = match command.as_str() {
+            "bench" => Command::Bench,
+            "run" => Command::Run,
+            "inspect" => Command::Inspect,
+            "replay" => Command::Replay,
+            _ => return Err(format!("unknown command: {command}").into()),
+        };
+        index += 1;
+        if options.command == Command::Replay {
+            options.replay = Some(PathBuf::from(
+                expanded
+                    .get(index)
+                    .ok_or("replay requires a recording path")?,
+            ));
+            index += 1;
+        }
+    }
+
+    while index < expanded.len() {
+        match expanded[index].as_str() {
+            "--medium" => options.medium = true,
+            "--iterations" => {
+                index += 1;
+                options.iterations = parse_positive(&expanded, index, "--iterations")?;
+            }
+            "--warmup" => {
+                index += 1;
+                options.warmup = parse_usize(&expanded, index, "--warmup")?;
+            }
+            "--format" => {
+                index += 1;
+                options.format = match value_at(&expanded, index, "--format")? {
+                    "text" => OutputFormat::Text,
+                    "json" => OutputFormat::Json,
+                    "csv" => OutputFormat::Csv,
+                    value => return Err(format!("unknown format: {value}").into()),
+                };
+            }
+            "--scenario" => {
+                index += 1;
+                options.scenario = match value_at(&expanded, index, "--scenario")? {
+                    "equilibrium" => Scenario::Equilibrium,
+                    "shock" => Scenario::Shock,
+                    "sustained" => Scenario::Sustained,
+                    value => return Err(format!("unknown scenario: {value}").into()),
+                };
+                options.medium = true;
+            }
+            "--record" => {
+                index += 1;
+                options.record = Some(PathBuf::from(value_at(&expanded, index, "--record")?));
+            }
+            value => return Err(format!("unknown argument: {value}").into()),
+        }
+        index += 1;
+    }
+    Ok(options)
+}
+
+fn parse_config(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let contents = fs::read_to_string(path)?;
+    let mut arguments = Vec::new();
+    for line in contents.lines() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (key, value) = line
+            .split_once('=')
+            .ok_or("config lines must use key=value")?;
+        let key = key.trim().replace('_', "-");
+        let value = value.trim().trim_matches('"');
+        if key == "medium" {
+            if value == "true" {
+                arguments.push("--medium".to_owned());
+            }
+        } else {
+            arguments.push(format!("--{key}"));
+            arguments.push(value.to_owned());
+        }
+    }
+    Ok(arguments)
+}
+
+fn parse_positive(arguments: &[String], index: usize, flag: &str) -> Result<usize, Box<dyn Error>> {
+    let parsed = parse_usize(arguments, index, flag)?;
+    if parsed == 0 {
+        return Err(format!("{flag} must be greater than zero").into());
+    }
+    Ok(parsed)
+}
+
+fn parse_usize(arguments: &[String], index: usize, flag: &str) -> Result<usize, Box<dyn Error>> {
+    Ok(value_at(arguments, index, flag)?.parse()?)
+}
+
+fn value_at<'a>(
+    arguments: &'a [String],
+    index: usize,
+    flag: &str,
+) -> Result<&'a str, Box<dyn Error>> {
+    arguments
+        .get(index)
+        .map(String::as_str)
+        .ok_or_else(|| format!("{flag} requires a value").into())
+}
+
+fn execute(options: &Options) -> Result<Report, Box<dyn Error>> {
+    let mut coordinator = coordinator()?;
+    let mut samples = Vec::with_capacity(options.iterations);
+    let mut final_energy = 0.0_f32;
+    if options.medium {
         let mut medium = CoupledOscillatorMedium::new(MediumConfig::default())?;
-        medium.perturb(0, 0.5, 0.5)?;
-        for _ in 0..iterations {
+        initialize_scenario(&mut medium, options.scenario)?;
+        for iteration in 0..options.warmup.saturating_add(options.iterations) {
+            if options.scenario == Scenario::Sustained && iteration % 250 == 0 {
+                medium.perturb(iteration / 250 % 4, 0.05, 0.1)?;
+            }
             let started = Instant::now();
-            let _telemetry = medium.step(&mut coordinator)?;
-            samples.push(elapsed_nanos(started));
+            let telemetry = medium.step(&mut coordinator)?;
+            if iteration >= options.warmup {
+                samples.push(elapsed_nanos(started));
+            }
+            final_energy = telemetry.energy;
         }
     } else {
         let mut features = vec![0.25_f32; TILE_DIM];
         let mut output = vec![0.0_f32; TILE_DIM];
-        for sequence_id in 0..iterations {
+        for iteration in 0..options.warmup.saturating_add(options.iterations) {
             let started = Instant::now();
             coordinator.submit_frame(ControlFrame {
-                sequence_id: u64::try_from(sequence_id)?,
+                sequence_id: u64::try_from(iteration)?,
                 phase_polarity: 1.0,
                 features: std::mem::take(&mut features),
             })?;
             let _telemetry = coordinator.poll_and_step_recycle(&mut output, &mut features)?;
-            samples.push(elapsed_nanos(started));
+            if iteration >= options.warmup {
+                samples.push(elapsed_nanos(started));
+            }
         }
     }
-
     samples.sort_unstable();
-    let mode = if with_medium { "medium" } else { "coordinator" };
-    println!(
-        "mode={mode} iterations={iterations} p50={}ns p95={}ns p99={}ns",
-        percentile(&samples, 50),
-        percentile(&samples, 95),
-        percentile(&samples, 99)
+    Ok(Report {
+        iterations: options.iterations,
+        p50: percentile(&samples, 50),
+        p95: percentile(&samples, 95),
+        p99: percentile(&samples, 99),
+        final_energy,
+        weight_checksum: coordinator.weight_checksum(),
+    })
+}
+
+fn initialize_scenario(
+    medium: &mut CoupledOscillatorMedium,
+    scenario: Scenario,
+) -> Result<(), Box<dyn Error>> {
+    match scenario {
+        Scenario::Equilibrium => {}
+        Scenario::Shock => medium.perturb(0, 1.4, 2.5)?,
+        Scenario::Sustained => medium.perturb(0, 0.4, 0.5)?,
+    }
+    Ok(())
+}
+
+fn print_report(options: &Options, report: Report) {
+    let mode = if options.medium {
+        "medium"
+    } else {
+        "coordinator"
+    };
+    match options.format {
+        OutputFormat::Text => println!(
+            "mode={mode} iterations={} p50={}ns p95={}ns p99={}ns energy={} checksum={:016x}",
+            report.iterations,
+            report.p50,
+            report.p95,
+            report.p99,
+            report.final_energy,
+            report.weight_checksum
+        ),
+        OutputFormat::Json => println!(
+            "{{\"mode\":\"{mode}\",\"iterations\":{},\"p50_ns\":{},\"p95_ns\":{},\"p99_ns\":{},\"final_energy\":{},\"weight_checksum\":\"{:016x}\"}}",
+            report.iterations,
+            report.p50,
+            report.p95,
+            report.p99,
+            report.final_energy,
+            report.weight_checksum
+        ),
+        OutputFormat::Csv => {
+            println!("mode,iterations,p50_ns,p95_ns,p99_ns,final_energy,weight_checksum");
+            println!(
+                "{mode},{},{},{},{},{},{:016x}",
+                report.iterations,
+                report.p50,
+                report.p95,
+                report.p99,
+                report.final_energy,
+                report.weight_checksum
+            );
+        }
+    }
+}
+
+fn write_recording(path: &Path, options: &Options, report: Report) -> Result<(), Box<dyn Error>> {
+    let scenario = match options.scenario {
+        Scenario::Equilibrium => "equilibrium",
+        Scenario::Shock => "shock",
+        Scenario::Sustained => "sustained",
+    };
+    let contents = format!(
+        "version=1\nmedium={}\niterations={}\nwarmup={}\nscenario={scenario}\nfinal_energy_bits={}\nweight_checksum={}\n",
+        options.medium,
+        options.iterations,
+        options.warmup,
+        report.final_energy.to_bits(),
+        report.weight_checksum
     );
+    fs::write(path, contents)?;
+    Ok(())
+}
+
+fn replay(options: &Options) -> Result<(), Box<dyn Error>> {
+    let path = options.replay.as_ref().ok_or("missing replay path")?;
+    let contents = fs::read_to_string(path)?;
+    let read = |key: &str| -> Result<&str, Box<dyn Error>> {
+        contents
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key}=")))
+            .ok_or_else(|| format!("recording lacks {key}").into())
+    };
+    if read("version")? != "1" {
+        return Err("unsupported recording version".into());
+    }
+    let mut replay_options = Options {
+        command: Command::Run,
+        medium: read("medium")?.parse()?,
+        iterations: read("iterations")?.parse()?,
+        warmup: read("warmup")?.parse()?,
+        format: options.format,
+        scenario: match read("scenario")? {
+            "equilibrium" => Scenario::Equilibrium,
+            "shock" => Scenario::Shock,
+            "sustained" => Scenario::Sustained,
+            _ => return Err("recording has an unknown scenario".into()),
+        },
+        record: None,
+        replay: None,
+    };
+    replay_options.format = OutputFormat::Text;
+    let report = execute(&replay_options)?;
+    let expected_energy_bits: u32 = read("final_energy_bits")?.parse()?;
+    let expected_checksum: u64 = read("weight_checksum")?.parse()?;
+    if report.final_energy.to_bits() != expected_energy_bits
+        || report.weight_checksum != expected_checksum
+    {
+        return Err("deterministic replay mismatch".into());
+    }
+    println!("replay=verified checksum={:016x}", report.weight_checksum);
     Ok(())
 }
 
@@ -71,23 +400,6 @@ fn coordinator() -> Result<ArgonCoordinator, Box<dyn Error>> {
         phase_polarity: 1.0,
     };
     Ok(ArgonCoordinator::new(2, &grid, plasticity, 8)?)
-}
-
-fn parse_iterations(arguments: &[String]) -> Result<usize, Box<dyn Error>> {
-    let Some(index) = arguments
-        .iter()
-        .position(|argument| argument == "--iterations")
-    else {
-        return Ok(DEFAULT_ITERATIONS);
-    };
-    let value = arguments
-        .get(index + 1)
-        .ok_or("--iterations requires a positive integer")?;
-    let parsed = value.parse::<usize>()?;
-    if parsed == 0 {
-        return Err("--iterations must be greater than zero".into());
-    }
-    Ok(parsed)
 }
 
 fn elapsed_nanos(started: Instant) -> u64 {

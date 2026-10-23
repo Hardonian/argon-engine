@@ -3,6 +3,8 @@
 
 #![forbid(non_ascii_idents)]
 
+/// Configurable graph lattice, heterogeneous sites, and deterministic sensor transport.
+pub mod advanced;
 /// High-precision implementation used to validate the real-time `f32` plant.
 pub mod reference;
 

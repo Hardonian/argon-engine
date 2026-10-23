@@ -314,10 +314,22 @@ impl SramTileSimulator {
                 });
             };
 
-            let mut acc = 0.0_f32;
-            for (&w_ij, &x_j) in weight_row.iter().zip(input_slice.iter()) {
-                acc = w_ij.mul_add(x_j, acc);
+            let mut acc0 = 0.0_f32;
+            let mut acc1 = 0.0_f32;
+            let mut acc2 = 0.0_f32;
+            let mut acc3 = 0.0_f32;
+            for (&[w0, w1, w2, w3], &[x0, x1, x2, x3]) in weight_row
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(input_slice.as_chunks::<4>().0)
+            {
+                acc0 = w0.mul_add(x0, acc0);
+                acc1 = w1.mul_add(x1, acc1);
+                acc2 = w2.mul_add(x2, acc2);
+                acc3 = w3.mul_add(x3, acc3);
             }
+            let acc = (acc0 + acc1) + (acc2 + acc3);
             let relu = acc.max(0.0_f32);
             *act_slot = relu;
             raw_norm_sq = relu.mul_add(relu, raw_norm_sq);
@@ -466,6 +478,40 @@ mod tests {
 
         assert!(g_final > g_initial);
         assert_eq!(sim.cumulative_steps(), 11);
+        Ok(())
+    }
+
+    #[test]
+    fn dense_forward_matches_golden_vector() -> Result<(), KernelError> {
+        let grid = PersistentGridConfig {
+            grid_dim_x: 1,
+            block_dim_x: 32,
+            shared_mem_bytes: 1_024,
+            tile_dim: 4,
+        };
+        let mut weights = vec![0.0_f32; 16];
+        for index in 0..4 {
+            weights[index * 4 + index] = 0.5;
+        }
+        let mut tile = SramTileSimulator::new(&grid, &weights)?;
+        let mut output = [0.0; 4];
+        let goodness = tile.step_in_sram(
+            &[0.1, 0.2, 0.3, 0.4],
+            &mut output,
+            &PlasticityConfig {
+                learning_rate: 0.01,
+                goodness_threshold: 1.0,
+                weight_decay: 0.001,
+                phase_polarity: 1.0,
+            },
+        )?;
+        assert!((goodness - 0.018_75).abs() < 1.0e-7);
+        let golden = [0.365_145_7, 0.730_291_4, 1.095_437_2, 1.460_582_9];
+        for (&actual, &expected) in output.iter().zip(&golden) {
+            assert!((actual - expected).abs() < 2.0e-6);
+        }
+        assert!((tile.weights()[0] - 0.499_536_37).abs() < 2.0e-7);
+        assert!((tile.weights()[1] - 0.000_072_735_62).abs() < 2.0e-9);
         Ok(())
     }
 }

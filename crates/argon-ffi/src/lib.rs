@@ -5,6 +5,7 @@
 
 use argon_kernel::{PersistentGridConfig, PlasticityConfig};
 use argon_runtime::{ArgonCoordinator, TickTelemetry};
+use std::ffi::c_char;
 use std::slice;
 
 /// Status codes returned across the C-ABI boundary.
@@ -32,6 +33,20 @@ pub const ARGON_ABI_VERSION: u32 = 1;
 #[no_mangle]
 pub const extern "C" fn argon_engine_abi_version() -> u32 {
     ARGON_ABI_VERSION
+}
+
+/// Returns a static null-terminated description for an [`ArgonStatus`].
+#[no_mangle]
+pub const extern "C" fn argon_status_message(status: ArgonStatus) -> *const c_char {
+    let bytes: &'static [u8] = match status {
+        ArgonStatus::Ok => b"operation completed successfully\0",
+        ArgonStatus::NullPointer => b"a required pointer was null\0",
+        ArgonStatus::InvalidConfig => b"configuration or execution was invalid\0",
+        ArgonStatus::DimensionMismatch => b"input or output dimension mismatch\0",
+        ArgonStatus::RingBufferStateError => b"ring buffer state error\0",
+        ArgonStatus::InternalPanic => b"panic intercepted at the FFI boundary\0",
+    };
+    bytes.as_ptr().cast()
 }
 
 /// Opaque C-ABI handle wrapping [`ArgonCoordinator`].
@@ -165,6 +180,7 @@ mod tests {
 
     #[test]
     fn test_ffi_lifecycle_and_zero_copy_step() {
+        assert_eq!(argon_engine_abi_version(), 1);
         let mut handle: *mut ArgonEngineHandle = ptr::null_mut();
         // Uses &raw mut to comply with clippy::borrow_as_ptr in Rust 1.82+ and 1.96+
         let status = unsafe { argon_engine_create(2, 8, 0.03, 2.0, 0.001, 8, &raw mut handle) };

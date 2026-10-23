@@ -2,12 +2,17 @@
 name = "argon-runtime"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Lock-free ring-buffer memory allocator and non-blocking Forward-Forward execution coordinator."
 
 [dependencies]
-argon-kernel = { path = "../argon-kernel" }
+argon-kernel = { path = "../argon-kernel", version = "0.1.0" }
+
+[dev-dependencies]
+loom = "0.7"
 
 [lints]
 workspace = true

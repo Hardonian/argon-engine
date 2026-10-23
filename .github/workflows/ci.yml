@@ -11,16 +11,21 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  rust-toolchain-gate:
-    name: Rust Nightly (Fmt, Clippy -D warnings, Test, WASM)
-    runs-on: ubuntu-latest
+  rust-platform-gate:
+    name: Rust ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust Nightly Toolchain
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.98.1"
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
@@ -28,16 +33,26 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Verify Formatting
-        run: cargo +nightly fmt --all -- --check
+        run: cargo fmt --all -- --check
+        if: runner.os == 'Linux'
 
       - name: Run Strict Clippy Lints
-        run: cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        if: runner.os == 'Linux'
 
       - name: Execute Workspace Unit & Integration Tests
-        run: cargo +nightly test --workspace --all-features -- --nocapture
+        run: cargo test --workspace --all-features -- --nocapture
 
       - name: Verify WASM Target Compilation
-        run: cargo +nightly build -p argon-wasm --target wasm32-unknown-unknown --release
+        run: cargo build -p argon-wasm --target wasm32-unknown-unknown --release
+        if: runner.os == 'Linux'
+
+      - name: C ABI smoke test
+        if: runner.os == 'Linux'
+        run: |
+          cargo build -p argon-ffi
+          cc -Iinclude examples/c_ffi_smoke.c -Ltarget/debug -largon_ffi -o target/c_ffi_smoke
+          LD_LIBRARY_PATH=target/debug target/c_ffi_smoke
 
   typescript-harness-gate:
     name: TypeScript Strict Harness & Triton Fallback Verification

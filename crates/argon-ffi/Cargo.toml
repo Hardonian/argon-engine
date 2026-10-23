@@ -2,16 +2,18 @@
 name = "argon-ffi"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Strict C-ABI boundary for zero-copy native and WASM integrations with Argon."
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-argon-kernel = { path = "../argon-kernel" }
-argon-runtime = { path = "../argon-runtime" }
+argon-kernel = { path = "../argon-kernel", version = "0.1.0" }
+argon-runtime = { path = "../argon-runtime", version = "0.1.0" }
 
 [lints]
 workspace = true

@@ -232,6 +232,96 @@ pub struct TickTelemetry {
     pub total_ticks: u64,
 }
 
+/// Compact fixed-layout trace record suitable for binary persistence.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TraceRecord {
+    /// Frame sequence identifier.
+    pub sequence_id: u64,
+    /// Mean layer goodness.
+    pub mean_goodness: f32,
+    /// Final activation L2 norm.
+    pub output_l2_norm: f32,
+    /// Queue depth observed after the tick.
+    pub queue_depth: u32,
+    /// Reserved for forward-compatible flags.
+    pub flags: u32,
+}
+
+/// Preallocated overwrite-oldest telemetry trace.
+#[derive(Debug)]
+pub struct TraceBuffer {
+    records: Vec<TraceRecord>,
+    cursor: usize,
+    len: usize,
+}
+
+impl TraceBuffer {
+    /// Allocates a fixed trace capacity.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] when capacity is zero.
+    pub fn with_capacity(capacity: usize) -> Result<Self, RuntimeError> {
+        if capacity == 0 {
+            return Err(RuntimeError::InvalidConfiguration(
+                "trace capacity must be greater than zero",
+            ));
+        }
+        let empty = TraceRecord {
+            sequence_id: 0,
+            mean_goodness: 0.0,
+            output_l2_norm: 0.0,
+            queue_depth: 0,
+            flags: 0,
+        };
+        Ok(Self {
+            records: vec![empty; capacity],
+            cursor: 0,
+            len: 0,
+        })
+    }
+
+    /// Records telemetry without allocating, overwriting the oldest slot when full.
+    pub fn record(&mut self, telemetry: TickTelemetry, queue_depth: usize) {
+        self.records[self.cursor] = TraceRecord {
+            sequence_id: telemetry.sequence_id,
+            mean_goodness: telemetry.mean_goodness,
+            output_l2_norm: telemetry.output_l2_norm,
+            queue_depth: u32::try_from(queue_depth).unwrap_or(u32::MAX),
+            flags: 0,
+        };
+        self.cursor = (self.cursor + 1) % self.records.len();
+        self.len = self.len.saturating_add(1).min(self.records.len());
+    }
+
+    /// Number of valid records retained.
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns `true` when no record has been written.
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Copies retained records in chronological order into caller storage.
+    ///
+    /// Returns the number copied; excess older records are omitted when output
+    /// storage is smaller than the retained trace.
+    pub fn copy_chronological(&self, output: &mut [TraceRecord]) -> usize {
+        let count = output.len().min(self.len);
+        let oldest = if self.len == self.records.len() {
+            self.cursor
+        } else {
+            0
+        };
+        for (offset, slot) in output.iter_mut().take(count).enumerate() {
+            *slot = self.records[(oldest + offset) % self.records.len()];
+        }
+        count
+    }
+}
+
 /// Owned deterministic checkpoint of coordinator learning state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoordinatorSnapshot {
@@ -239,6 +329,57 @@ pub struct CoordinatorSnapshot {
     pub layer_weights: Vec<Vec<f32>>,
     /// Number of successfully executed ticks.
     pub total_ticks: u64,
+}
+
+/// Policy used when coordinator ingress has no free slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackpressurePolicy {
+    /// Preserve queued frames and reject the new frame.
+    Reject,
+    /// Remove the oldest queued frame and enqueue the new frame.
+    DropOldest,
+}
+
+/// Deterministic repeating positive/negative learning-phase schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PhaseSchedule {
+    positive_ticks: u32,
+    negative_ticks: u32,
+    cursor: u32,
+}
+
+impl PhaseSchedule {
+    /// Creates a repeating schedule with non-zero positive and negative spans.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] if either span is zero or their sum overflows.
+    pub const fn new(positive_ticks: u32, negative_ticks: u32) -> Result<Self, RuntimeError> {
+        if positive_ticks == 0
+            || negative_ticks == 0
+            || positive_ticks.checked_add(negative_ticks).is_none()
+        {
+            return Err(RuntimeError::InvalidConfiguration(
+                "phase schedule spans must be non-zero and must not overflow",
+            ));
+        }
+        Ok(Self {
+            positive_ticks,
+            negative_ticks,
+            cursor: 0,
+        })
+    }
+
+    /// Returns the next phase polarity and advances the schedule.
+    pub const fn next_polarity(&mut self) -> f32 {
+        let polarity = if self.cursor < self.positive_ticks {
+            1.0
+        } else {
+            -1.0
+        };
+        let period = self.positive_ticks + self.negative_ticks;
+        self.cursor = (self.cursor + 1) % period;
+        polarity
+    }
 }
 
 /// Non-blocking multi-layer persistent execution coordinator.
@@ -332,6 +473,41 @@ impl ArgonCoordinator {
             ));
         }
         self.ring_buffer.try_push_recover(frame)
+    }
+
+    /// Submits according to a bounded-queue backpressure policy.
+    ///
+    /// The returned frame, when present, is the oldest frame displaced by
+    /// [`BackpressurePolicy::DropOldest`].
+    ///
+    /// # Errors
+    /// Returns the runtime error and incoming frame when rejection is selected
+    /// or dimensions are invalid.
+    pub fn submit_with_policy(
+        &mut self,
+        frame: ControlFrame,
+        policy: BackpressurePolicy,
+    ) -> Result<Option<ControlFrame>, (RuntimeError, ControlFrame)> {
+        match self.submit_frame_recover(frame) {
+            Ok(()) => Ok(None),
+            Err((RuntimeError::RingBufferFull { .. }, frame))
+                if policy == BackpressurePolicy::DropOldest =>
+            {
+                let displaced = match self.ring_buffer.try_pop() {
+                    Ok(displaced) => displaced,
+                    Err(error) => return Err((error, frame)),
+                };
+                self.ring_buffer
+                    .try_push_recover(frame)
+                    .map(|()| Some(displaced))
+            }
+            Err(failure) => Err(failure),
+        }
+    }
+
+    /// Returns the current number of queued ingress frames.
+    pub fn queue_depth(&self) -> usize {
+        self.ring_buffer.len()
     }
 
     /// Returns the sensory and action dimension expected by this coordinator.
@@ -447,6 +623,43 @@ impl ArgonCoordinator {
         self.execute_loaded(sequence_id, phase_polarity, output_action)
     }
 
+    /// Drains up to one action vector per telemetry slot into flat output storage.
+    ///
+    /// An empty ring ends the drain successfully. Other runtime errors are
+    /// propagated after already-completed outputs remain valid.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] when output storage has the wrong size or a
+    /// kernel operation fails.
+    pub fn poll_batch(
+        &mut self,
+        output_actions: &mut [f32],
+        telemetry: &mut [TickTelemetry],
+    ) -> Result<usize, RuntimeError> {
+        let expected = telemetry.len().saturating_mul(self.tile_dim);
+        if output_actions.len() != expected {
+            return Err(RuntimeError::Kernel(KernelError::DimensionMismatch {
+                expected,
+                actual: output_actions.len(),
+            }));
+        }
+        let mut completed = 0_usize;
+        for (output, telemetry_slot) in output_actions
+            .chunks_exact_mut(self.tile_dim)
+            .zip(telemetry.iter_mut())
+        {
+            match self.poll_and_step(output) {
+                Ok(value) => {
+                    *telemetry_slot = value;
+                    completed = completed.saturating_add(1);
+                }
+                Err(RuntimeError::RingBufferEmpty) => break,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(completed)
+    }
+
     fn execute_loaded(
         &mut self,
         sequence_id: u64,
@@ -496,6 +709,26 @@ impl ArgonCoordinator {
     /// Returns [`RuntimeError`] when the target norm is invalid.
     pub fn apply_homeostasis(&mut self, target_norm: f32) -> Result<(), RuntimeError> {
         for tile in &mut self.tiles {
+            tile.scale_weights_to_norm(target_norm)?;
+        }
+        Ok(())
+    }
+
+    /// Applies an independent homeostatic target norm to each layer.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] when target count differs from layer count or a
+    /// target norm is invalid.
+    pub fn apply_homeostasis_per_layer(
+        &mut self,
+        target_norms: &[f32],
+    ) -> Result<(), RuntimeError> {
+        if target_norms.len() != self.tiles.len() {
+            return Err(RuntimeError::InvalidConfiguration(
+                "homeostatic target count must match layer count",
+            ));
+        }
+        for (tile, &target_norm) in self.tiles.iter_mut().zip(target_norms) {
             tile.scale_weights_to_norm(target_norm)?;
         }
         Ok(())
@@ -614,6 +847,61 @@ mod tests {
         assert_ne!(initial_checksum, coordinator.weight_checksum());
         coordinator.restore(&snapshot)?;
         assert_eq!(initial_checksum, coordinator.weight_checksum());
+        Ok(())
+    }
+
+    #[test]
+    fn phase_schedule_and_batch_backpressure_are_deterministic() -> Result<(), RuntimeError> {
+        let mut phases = PhaseSchedule::new(2, 1)?;
+        let actual = [
+            phases.next_polarity(),
+            phases.next_polarity(),
+            phases.next_polarity(),
+            phases.next_polarity(),
+        ]
+        .map(f32::to_bits);
+        assert_eq!(actual, [1.0, 1.0, -1.0, 1.0].map(f32::to_bits));
+        let grid = PersistentGridConfig {
+            grid_dim_x: 1,
+            block_dim_x: 64,
+            shared_mem_bytes: 16_384,
+            tile_dim: 8,
+        };
+        let plasticity = PlasticityConfig {
+            learning_rate: 0.01,
+            goodness_threshold: 1.0,
+            weight_decay: 0.001,
+            phase_polarity: 1.0,
+        };
+        let mut coordinator = ArgonCoordinator::new(1, &grid, plasticity, 2)?;
+        for sequence_id in 0..2 {
+            coordinator.submit_frame(ControlFrame {
+                sequence_id,
+                phase_polarity: 1.0,
+                features: vec![0.25; 8],
+            })?;
+        }
+        let displaced = coordinator
+            .submit_with_policy(
+                ControlFrame {
+                    sequence_id: 2,
+                    phase_polarity: 1.0,
+                    features: vec![0.25; 8],
+                },
+                BackpressurePolicy::DropOldest,
+            )
+            .map_err(|(error, _frame)| error)?;
+        assert_eq!(displaced.map(|frame| frame.sequence_id), Some(0));
+        let mut output = [0.0; 16];
+        let empty = TickTelemetry {
+            sequence_id: 0,
+            mean_goodness: 0.0,
+            output_l2_norm: 0.0,
+            total_ticks: 0,
+        };
+        let mut telemetry = [empty; 2];
+        assert_eq!(coordinator.poll_batch(&mut output, &mut telemetry)?, 2);
+        assert_eq!([telemetry[0].sequence_id, telemetry[1].sequence_id], [1, 2]);
         Ok(())
     }
 }

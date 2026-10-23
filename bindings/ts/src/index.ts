@@ -84,9 +84,20 @@ export class ArgonOrchestrator {
   }
 
   public step(sensoryInput: Float32Array, polarity: PhasePolarity): ArgonTickResult {
+    const output = new Float32Array(this.config.tileDim);
+    return this.stepInto(sensoryInput, polarity, output);
+  }
+
+  public stepInto(
+    sensoryInput: Float32Array,
+    polarity: PhasePolarity,
+    output: Float32Array,
+  ): ArgonTickResult {
     const dim = this.config.tileDim;
-    if (sensoryInput.length !== dim) {
-      throw new Error(`Dimension mismatch: expected ${String(dim)}, received ${String(sensoryInput.length)}`);
+    if (sensoryInput.length !== dim || output.length !== dim) {
+      throw new Error(
+        `Dimension mismatch: expected ${String(dim)}, received input=${String(sensoryInput.length)} output=${String(output.length)}`,
+      );
     }
 
     let sumSquared = 0.0;
@@ -109,7 +120,6 @@ export class ArgonOrchestrator {
     const effectiveLr = this.config.learningRate * polarity * modulation;
     const invRms = 1.0 / (Math.sqrt(goodness) + 1e-6);
 
-    const output = new Float32Array(dim);
     for (let i = 0; i < dim; i += 1) {
       const y = readFloat32At(this.scratchActivations, i);
       const rowOffset = i * dim;
@@ -134,6 +144,72 @@ export class ArgonOrchestrator {
   }
 }
 
+export interface ArgonWasmExports {
+  readonly memory: WebAssembly.Memory;
+  readonly argon_wasm_create: (tileDim: number, learningRate: number, threshold: number, decay: number) => number;
+  readonly argon_wasm_input_ptr: (arena: number) => number;
+  readonly argon_wasm_output_ptr: (arena: number) => number;
+  readonly argon_wasm_step_value: (arena: number, polarity: number) => number;
+  readonly argon_wasm_destroy: (arena: number) => void;
+}
+
+export class WasmArgonOrchestrator {
+  private readonly exports: ArgonWasmExports;
+  private readonly handle: number;
+  private readonly tileDim: number;
+  private sequenceCounter: number = 0;
+  private disposed: boolean = false;
+
+  public constructor(exports: ArgonWasmExports, config: ArgonHarnessConfig) {
+    if (!validateHarnessConfig(config)) {
+      throw new Error("Invalid ArgonHarnessConfig supplied to WasmArgonOrchestrator.");
+    }
+    this.exports = exports;
+    this.tileDim = config.tileDim;
+    this.handle = exports.argon_wasm_create(
+      config.tileDim,
+      config.learningRate,
+      config.goodnessThreshold,
+      config.weightDecay,
+    );
+    if (this.handle === 0) {
+      throw new Error("Argon WASM arena creation failed.");
+    }
+  }
+
+  public stepInto(
+    sensoryInput: Float32Array,
+    polarity: PhasePolarity,
+    output: Float32Array,
+  ): ArgonTickResult {
+    if (this.disposed) {
+      throw new Error("Argon WASM arena has been disposed.");
+    }
+    if (sensoryInput.length !== this.tileDim || output.length !== this.tileDim) {
+      throw new RangeError("WASM input and output dimensions must match tileDim.");
+    }
+    const inputOffset = this.exports.argon_wasm_input_ptr(this.handle);
+    const inputView = new Float32Array(this.exports.memory.buffer, inputOffset, this.tileDim);
+    inputView.set(sensoryInput);
+    const goodness = this.exports.argon_wasm_step_value(this.handle, polarity);
+    if (!Number.isFinite(goodness)) {
+      throw new Error("Argon WASM step failed.");
+    }
+    const outputOffset = this.exports.argon_wasm_output_ptr(this.handle);
+    const outputView = new Float32Array(this.exports.memory.buffer, outputOffset, this.tileDim);
+    output.set(outputView);
+    this.sequenceCounter += 1;
+    return { sequenceId: this.sequenceCounter, goodness, normalizedActivations: output };
+  }
+
+  public dispose(): void {
+    if (!this.disposed) {
+      this.exports.argon_wasm_destroy(this.handle);
+      this.disposed = true;
+    }
+  }
+}
+
 void describe("ArgonOrchestrator strict harness verification", () => {
   void it("increases goodness monotonically under positive phase sensory stream", () => {
     const engine = new ArgonOrchestrator({
@@ -155,5 +231,17 @@ void describe("ArgonOrchestrator strict harness verification", () => {
       `Expected goodness to rise: ${String(firstTick.goodness)} -> ${String(lastTick.goodness)}`
     );
     assert.strictEqual(lastTick.sequenceId, 9);
+  });
+
+  void it("reuses a caller-owned output buffer", () => {
+    const engine = new ArgonOrchestrator({
+      tileDim: 4,
+      learningRate: 0.01,
+      goodnessThreshold: 1.0,
+      weightDecay: 0.001,
+    });
+    const output = new Float32Array(4);
+    const result = engine.stepInto(new Float32Array([0.4, 0.3, 0.2, 0.1]), 1, output);
+    assert.strictEqual(result.normalizedActivations, output);
   });
 });

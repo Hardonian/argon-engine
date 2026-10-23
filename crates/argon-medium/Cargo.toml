@@ -2,15 +2,17 @@
 name = "argon-medium"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Symplectic coupled-oscillator physical medium for Argon closed-loop control."
 
 [dependencies]
-argon-runtime = { path = "../argon-runtime" }
+argon-runtime = { path = "../argon-runtime", version = "0.1.0" }
 
 [dev-dependencies]
-argon-kernel = { path = "../argon-kernel" }
+argon-kernel = { path = "../argon-kernel", version = "0.1.0" }
 
 [lints]
 workspace = true

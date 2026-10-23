@@ -2,14 +2,18 @@
 name = "argon-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Nanosecond latency benchmark harness for the Argon execution engine."
 
 [dependencies]
-argon-kernel = { path = "../argon-kernel" }
-argon-medium = { path = "../argon-medium" }
-argon-runtime = { path = "../argon-runtime" }
+argon-kernel = { path = "../argon-kernel", version = "0.1.0" }
+argon-medium = { path = "../argon-medium", version = "0.1.0" }
+argon-runtime = { path = "../argon-runtime", version = "0.1.0" }
+argon-ffi = { path = "../argon-ffi", version = "0.1.0" }
+argon-backend = { path = "../argon-backend", version = "0.1.0" }
 
 [lints]
 workspace = true

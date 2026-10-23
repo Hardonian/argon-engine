@@ -2,16 +2,18 @@
 name = "argon-wasm"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Zero-serialization WebAssembly SIMD128 linear-memory bridge for Argon persistent tiles."
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-argon-kernel = { path = "../argon-kernel" }
-argon-runtime = { path = "../argon-runtime" }
+argon-kernel = { path = "../argon-kernel", version = "0.1.0" }
+argon-runtime = { path = "../argon-runtime", version = "0.1.0" }
 
 [lints]
 workspace = true

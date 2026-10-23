@@ -2,8 +2,10 @@
 name = "argon-kernel"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Bare-metal PTX persistent kernel emitter and ARM64/CPU deterministic fallback simulator for Argon."
 
 [features]

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "closed_loop_medium": {
+    "x86_64_p99_ns": 1000000,
+    "aarch64_p99_ns": 1000000,
+    "allocation_count_after_warmup": 0
+  },
+  "numerical": {
+    "conservative_relative_energy_error": 0.0001,
+    "accelerated_single_tick_absolute_error": 0.00002,
+    "accelerated_1000_tick_absolute_error": 0.0002
+  }
+}

@@ -1,0 +1,18 @@
+[package]
+name = "argon-backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Backend capability discovery and execution abstraction for Argon Engine."
+
+[dependencies]
+argon-runtime = { path = "../argon-runtime", version = "0.1.0" }
+
+[dev-dependencies]
+argon-kernel = { path = "../argon-kernel", version = "0.1.0" }
+
+[lints]
+workspace = true

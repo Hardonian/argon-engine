@@ -1,0 +1,16 @@
+name: CUDA backend qualification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 3 * * 0"
+
+jobs:
+  triton-parity:
+    runs-on: [self-hosted, linux, x64, cuda]
+    steps:
+      - uses: actions/checkout@v4
+      - run: nvidia-smi
+      - run: python3 -m pip install numpy torch triton
+      - run: python3 kernels/triton/persistent_sram_ff.py
+      - run: cargo test --workspace --all-features
