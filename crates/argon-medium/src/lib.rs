@@ -19,14 +19,20 @@ pub struct MediumConfig {
     pub damping: f32,
     /// Maximum absolute actuator torque per site.
     pub max_torque: f32,
+    /// Maximum actuator torque change per second.
+    pub max_torque_slew_per_second: f32,
     /// Absolute position mapped to the edge of the normalized sensory range.
     pub position_scale: f32,
     /// Absolute velocity mapped to the edge of the normalized sensory range.
     pub velocity_scale: f32,
     /// Plant energy above which synaptic homeostasis is applied.
     pub energy_boundary: f32,
+    /// Energy below which an active homeostatic alarm is released.
+    pub energy_release_boundary: f32,
     /// Target L2 norm used for homeostatic synaptic scaling.
     pub homeostasis_target_norm: f32,
+    /// Minimum ticks between homeostatic scaling operations.
+    pub homeostasis_cooldown_steps: u64,
 }
 
 impl Default for MediumConfig {
@@ -37,10 +43,13 @@ impl Default for MediumConfig {
             coupling: 0.2,
             damping: 0.15,
             max_torque: 0.05,
+            max_torque_slew_per_second: 10.0,
             position_scale: std::f32::consts::PI,
             velocity_scale: 4.0,
             energy_boundary: 4.0,
+            energy_release_boundary: 3.0,
             homeostasis_target_norm: 1.0,
+            homeostasis_cooldown_steps: 100,
         }
     }
 }
@@ -87,8 +96,120 @@ pub struct MediumTelemetry {
     pub neural: TickTelemetry,
     /// Hamiltonian-like kinetic, pendulum, and coupling energy after integration.
     pub energy: f32,
+    /// Individual physical energy terms after integration.
+    pub energy_components: EnergyComponents,
     /// Whether the energy boundary triggered homeostatic synaptic scaling.
     pub homeostasis_applied: bool,
+    /// Number of actuator sites limited by magnitude or slew constraints.
+    pub saturated_actuators: usize,
+    /// Largest absolute torque requested before actuator limiting.
+    pub peak_requested_torque: f32,
+}
+
+/// Decomposition of the physical plant energy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnergyComponents {
+    /// Translational/angular kinetic energy.
+    pub kinetic: f32,
+    /// On-site pendulum gravitational potential.
+    pub pendulum_potential: f32,
+    /// Nearest-neighbor spring coupling potential.
+    pub coupling_potential: f32,
+    /// Sum of all energy terms.
+    pub total: f32,
+}
+
+/// A deterministic controller that writes one requested torque per oscillator.
+pub trait Controller {
+    /// Computes actuator torques from the current physical state.
+    ///
+    /// # Errors
+    /// Returns [`MediumError`] if controller storage or state is incompatible
+    /// with the supplied plant.
+    fn control(
+        &mut self,
+        positions: &[f32],
+        velocities: &[f32],
+        output_torques: &mut [f32],
+    ) -> Result<(), MediumError>;
+}
+
+/// Proportional-derivative stabilizer used as a safe control baseline.
+#[derive(Debug, Clone)]
+pub struct PdController {
+    proportional_gain: f32,
+    derivative_gain: f32,
+    targets: Vec<f32>,
+}
+
+impl PdController {
+    /// Creates a controller targeting zero angle at every site.
+    ///
+    /// # Errors
+    /// Returns [`MediumError`] if dimensions or gains are invalid.
+    pub fn new(
+        dimension: usize,
+        proportional_gain: f32,
+        derivative_gain: f32,
+    ) -> Result<Self, MediumError> {
+        if dimension < 2
+            || !proportional_gain.is_finite()
+            || proportional_gain < 0.0
+            || !derivative_gain.is_finite()
+            || derivative_gain < 0.0
+        {
+            return Err(MediumError::InvalidConfiguration(
+                "PD dimensions and gains must be finite and non-negative",
+            ));
+        }
+        Ok(Self {
+            proportional_gain,
+            derivative_gain,
+            targets: vec![0.0; dimension],
+        })
+    }
+
+    /// Replaces target angles without allocating.
+    ///
+    /// # Errors
+    /// Returns [`MediumError`] for a dimension mismatch or non-finite target.
+    pub fn set_targets(&mut self, targets: &[f32]) -> Result<(), MediumError> {
+        if targets.len() != self.targets.len() || targets.iter().any(|value| !value.is_finite()) {
+            return Err(MediumError::InvalidConfiguration(
+                "PD targets must be finite and match the plant dimension",
+            ));
+        }
+        self.targets.copy_from_slice(targets);
+        Ok(())
+    }
+}
+
+impl Controller for PdController {
+    fn control(
+        &mut self,
+        positions: &[f32],
+        velocities: &[f32],
+        output_torques: &mut [f32],
+    ) -> Result<(), MediumError> {
+        if positions.len() != self.targets.len()
+            || velocities.len() != self.targets.len()
+            || output_torques.len() != self.targets.len()
+        {
+            return Err(MediumError::InvalidConfiguration(
+                "controller state dimensions do not match",
+            ));
+        }
+        for (((torque, &position), &velocity), &target) in output_torques
+            .iter_mut()
+            .zip(positions)
+            .zip(velocities)
+            .zip(&self.targets)
+        {
+            *torque = (-self.proportional_gain)
+                .mul_add(position - target, -self.derivative_gain * velocity);
+        }
+        Ok(())
+    }
 }
 
 /// Cache-line-aligned ring of pendula coupled by nearest-neighbor springs.
@@ -107,7 +228,11 @@ pub struct CoupledOscillatorMedium {
     sensory_observation: Vec<f32>,
     motor_actions: Vec<f32>,
     applied_torques: Vec<f32>,
+    requested_torques: Vec<f32>,
+    baseline_torques: Vec<f32>,
     sequence_id: u64,
+    homeostasis_active: bool,
+    homeostasis_cooldown_remaining: u64,
 }
 
 impl CoupledOscillatorMedium {
@@ -131,7 +256,11 @@ impl CoupledOscillatorMedium {
             sensory_observation: vec![0.0; feature_dim],
             motor_actions: vec![0.0; feature_dim],
             applied_torques: vec![0.0; config.dimension],
+            requested_torques: vec![0.0; config.dimension],
+            baseline_torques: vec![0.0; config.dimension],
             sequence_id: 0,
+            homeostasis_active: false,
+            homeostasis_cooldown_remaining: 0,
         })
     }
 
@@ -202,35 +331,14 @@ impl CoupledOscillatorMedium {
             ));
         }
 
-        compute_accelerations(
+        integrate_state(
             &self.config,
-            &self.positions,
-            &self.velocities,
+            &mut self.positions,
+            &mut self.velocities,
             torques,
             &mut self.accelerations,
-        );
-        let half_dt = 0.5 * self.config.time_step;
-        for ((position, velocity), &acceleration) in self
-            .positions
-            .iter_mut()
-            .zip(&mut self.velocities)
-            .zip(&self.accelerations)
-        {
-            *velocity = half_dt.mul_add(acceleration, *velocity);
-            *position = self.config.time_step.mul_add(*velocity, *position);
-        }
-
-        compute_accelerations(
-            &self.config,
-            &self.positions,
-            &self.velocities,
-            torques,
             &mut self.next_accelerations,
         );
-        for (velocity, &acceleration) in self.velocities.iter_mut().zip(&self.next_accelerations) {
-            *velocity = half_dt.mul_add(acceleration, *velocity);
-        }
-        std::mem::swap(&mut self.accelerations, &mut self.next_accelerations);
         Ok(())
     }
 
@@ -242,6 +350,26 @@ impl CoupledOscillatorMedium {
     pub fn step(
         &mut self,
         coordinator: &mut ArgonCoordinator,
+    ) -> Result<MediumTelemetry, MediumError> {
+        self.step_internal(coordinator, None)
+    }
+
+    /// Executes a closed-loop tick with a baseline controller plus neural residual action.
+    ///
+    /// # Errors
+    /// Returns [`MediumError`] for incompatible controller/runtime state.
+    pub fn step_with_controller(
+        &mut self,
+        coordinator: &mut ArgonCoordinator,
+        controller: &mut dyn Controller,
+    ) -> Result<MediumTelemetry, MediumError> {
+        self.step_internal(coordinator, Some(controller))
+    }
+
+    fn step_internal(
+        &mut self,
+        coordinator: &mut ArgonCoordinator,
+        controller: Option<&mut dyn Controller>,
     ) -> Result<MediumTelemetry, MediumError> {
         if coordinator.tile_dim() != self.sensory_observation.len() {
             return Err(MediumError::InvalidConfiguration(
@@ -264,73 +392,104 @@ impl CoupledOscillatorMedium {
             phase_polarity: 1.0,
             features: std::mem::take(&mut self.sensory_observation),
         };
-        coordinator.submit_frame(frame)?;
+        if let Err((error, mut rejected)) = coordinator.submit_frame_recover(frame) {
+            std::mem::swap(&mut self.sensory_observation, &mut rejected.features);
+            return Err(error.into());
+        }
         let neural = coordinator
             .poll_and_step_recycle(&mut self.motor_actions, &mut self.sensory_observation)?;
 
+        self.baseline_torques.fill(0.0);
+        if let Some(controller) = controller {
+            controller.control(
+                &self.positions,
+                &self.velocities,
+                &mut self.baseline_torques,
+            )?;
+        }
+
+        let max_delta = self.config.max_torque_slew_per_second * self.config.time_step;
+        let mut saturated_actuators = 0_usize;
+        let mut peak_requested_torque = 0.0_f32;
         for (index, torque) in self.applied_torques.iter_mut().enumerate() {
             let channel = index.saturating_mul(2);
             let differential = self.motor_actions[channel] - self.motor_actions[channel + 1];
-            *torque = differential.clamp(-1.0, 1.0) * self.config.max_torque;
+            let requested =
+                differential.mul_add(self.config.max_torque, self.baseline_torques[index]);
+            self.requested_torques[index] = requested;
+            peak_requested_torque = peak_requested_torque.max(requested.abs());
+            let magnitude_limited =
+                requested.clamp(-self.config.max_torque, self.config.max_torque);
+            let slew_limited = magnitude_limited.clamp(*torque - max_delta, *torque + max_delta);
+            if (slew_limited - requested).abs() > f32::EPSILON {
+                saturated_actuators = saturated_actuators.saturating_add(1);
+            }
+            *torque = slew_limited;
         }
 
-        let config = self.config;
-        compute_accelerations(
-            &config,
-            &self.positions,
-            &self.velocities,
+        integrate_state(
+            &self.config,
+            &mut self.positions,
+            &mut self.velocities,
             &self.applied_torques,
             &mut self.accelerations,
-        );
-        let half_dt = 0.5 * config.time_step;
-        for ((position, velocity), &acceleration) in self
-            .positions
-            .iter_mut()
-            .zip(&mut self.velocities)
-            .zip(&self.accelerations)
-        {
-            *velocity = half_dt.mul_add(acceleration, *velocity);
-            *position = config.time_step.mul_add(*velocity, *position);
-        }
-        compute_accelerations(
-            &config,
-            &self.positions,
-            &self.velocities,
-            &self.applied_torques,
             &mut self.next_accelerations,
         );
-        for (velocity, &acceleration) in self.velocities.iter_mut().zip(&self.next_accelerations) {
-            *velocity = half_dt.mul_add(acceleration, *velocity);
-        }
-        std::mem::swap(&mut self.accelerations, &mut self.next_accelerations);
 
-        let energy = self.energy();
-        let homeostasis_applied = energy > self.config.energy_boundary;
+        let energy_components = self.energy_components();
+        let energy = energy_components.total;
+        if self.homeostasis_active && energy < self.config.energy_release_boundary {
+            self.homeostasis_active = false;
+        } else if energy > self.config.energy_boundary {
+            self.homeostasis_active = true;
+        }
+        let homeostasis_applied =
+            self.homeostasis_active && self.homeostasis_cooldown_remaining == 0;
         if homeostasis_applied {
             coordinator.apply_homeostasis(self.config.homeostasis_target_norm)?;
+            self.homeostasis_cooldown_remaining = self.config.homeostasis_cooldown_steps;
+        } else {
+            self.homeostasis_cooldown_remaining =
+                self.homeostasis_cooldown_remaining.saturating_sub(1);
         }
         self.sequence_id = self.sequence_id.wrapping_add(1);
 
         Ok(MediumTelemetry {
             neural,
             energy,
+            energy_components,
             homeostasis_applied,
+            saturated_actuators,
+            peak_requested_torque,
         })
     }
 
     /// Computes kinetic, pendulum, and nearest-neighbor coupling energy.
     pub fn energy(&self) -> f32 {
-        let mut total = 0.0_f32;
+        self.energy_components().total
+    }
+
+    /// Computes each component of the plant energy.
+    pub fn energy_components(&self) -> EnergyComponents {
+        let mut kinetic = 0.0_f32;
+        let mut pendulum_potential = 0.0_f32;
+        let mut coupling_potential = 0.0_f32;
         for index in 0..self.config.dimension {
             let velocity = self.velocities[index];
             let position = self.positions[index];
             let next = self.positions[(index + 1) % self.config.dimension];
-            total = (0.5 * velocity).mul_add(velocity, total);
-            total += 1.0 - position.cos();
+            kinetic = (0.5 * velocity).mul_add(velocity, kinetic);
+            pendulum_potential += 1.0 - position.cos();
             let displacement = next - position;
-            total = (0.5 * self.config.coupling * displacement).mul_add(displacement, total);
+            coupling_potential = (0.5 * self.config.coupling * displacement)
+                .mul_add(displacement, coupling_potential);
         }
-        total
+        EnergyComponents {
+            kinetic,
+            pendulum_potential,
+            coupling_potential,
+            total: kinetic + pendulum_potential + coupling_potential,
+        }
     }
 }
 
@@ -355,7 +514,18 @@ fn validate_config(config: MediumConfig) -> Result<(), MediumError> {
             "scales, boundaries, target norm, and time step must be finite and positive",
         ));
     }
-    let non_negative = [config.coupling, config.damping, config.max_torque];
+    if config.energy_release_boundary > config.energy_boundary {
+        return Err(MediumError::InvalidConfiguration(
+            "energy release boundary must not exceed the trigger boundary",
+        ));
+    }
+    let non_negative = [
+        config.coupling,
+        config.damping,
+        config.max_torque,
+        config.max_torque_slew_per_second,
+        config.energy_release_boundary,
+    ];
     if non_negative
         .iter()
         .any(|value| !value.is_finite() || *value < 0.0)
@@ -370,7 +540,6 @@ fn validate_config(config: MediumConfig) -> Result<(), MediumError> {
 fn compute_accelerations(
     config: &MediumConfig,
     positions: &[f32],
-    velocities: &[f32],
     torques: &[f32],
     output: &mut [f32],
 ) {
@@ -381,8 +550,40 @@ fn compute_accelerations(
         let right = positions[(index + 1) % dimension];
         let neighbor_delta = (left - center) + (right - center);
         let coupled = config.coupling.mul_add(neighbor_delta, -center.sin());
-        output[index] = (-config.damping).mul_add(velocities[index], coupled + torques[index]);
+        output[index] = coupled + torques[index];
     }
+}
+
+fn integrate_state(
+    config: &MediumConfig,
+    positions: &mut [f32],
+    velocities: &mut [f32],
+    torques: &[f32],
+    accelerations: &mut Vec<f32>,
+    next_accelerations: &mut Vec<f32>,
+) {
+    let damping_half_step = (-0.5 * config.damping * config.time_step).exp();
+    for velocity in &mut *velocities {
+        *velocity *= damping_half_step;
+    }
+
+    compute_accelerations(config, positions, torques, accelerations);
+    let half_dt = 0.5 * config.time_step;
+    for ((position, velocity), &acceleration) in positions
+        .iter_mut()
+        .zip(&mut *velocities)
+        .zip(&*accelerations)
+    {
+        *velocity = half_dt.mul_add(acceleration, *velocity);
+        *position = config.time_step.mul_add(*velocity, *position);
+    }
+
+    compute_accelerations(config, positions, torques, next_accelerations);
+    for (velocity, &acceleration) in velocities.iter_mut().zip(&*next_accelerations) {
+        *velocity = half_dt.mul_add(acceleration, *velocity);
+        *velocity *= damping_half_step;
+    }
+    std::mem::swap(accelerations, next_accelerations);
 }
 
 #[cfg(test)]

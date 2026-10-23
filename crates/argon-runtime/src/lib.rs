@@ -72,12 +72,25 @@ pub struct ControlFrame {
 }
 
 /// Lock-free, bounded Single-Producer Single-Consumer (SPSC) ring buffer.
+#[derive(Debug)]
 pub struct SpscRingBuffer {
     capacity: usize,
     mask: usize,
     head: CachePaddedAtomicUsize,
     tail: CachePaddedAtomicUsize,
     slots: Vec<UnsafeCell<Option<ControlFrame>>>,
+}
+
+/// Borrowed producer endpoint for an [`SpscRingBuffer`].
+#[derive(Debug, Clone, Copy)]
+pub struct SpscProducer<'a> {
+    ring: &'a SpscRingBuffer,
+}
+
+/// Borrowed consumer endpoint for an [`SpscRingBuffer`].
+#[derive(Debug, Clone, Copy)]
+pub struct SpscConsumer<'a> {
+    ring: &'a SpscRingBuffer,
 }
 
 // SAFETY: SpscRingBuffer enforces strict acquire/release memory ordering across independent slots.
@@ -115,19 +128,35 @@ impl SpscRingBuffer {
     /// # Errors
     /// Returns [`RuntimeError::RingBufferFull`] if all slots are currently occupied.
     pub fn try_push(&self, frame: ControlFrame) -> Result<(), RuntimeError> {
+        self.try_push_recover(frame)
+            .map_err(|(error, _frame)| error)
+    }
+
+    /// Enqueues a frame while returning ownership when the bounded queue is full.
+    ///
+    /// # Errors
+    /// Returns the error and original frame if no queue slot is available.
+    pub fn try_push_recover(
+        &self,
+        frame: ControlFrame,
+    ) -> Result<(), (RuntimeError, ControlFrame)> {
         let head = self.head.value.load(Ordering::Relaxed);
         let tail = self.tail.value.load(Ordering::Acquire);
 
         if head.wrapping_sub(tail) >= self.capacity {
-            return Err(RuntimeError::RingBufferFull {
-                capacity: self.capacity,
-            });
+            return Err((
+                RuntimeError::RingBufferFull {
+                    capacity: self.capacity,
+                },
+                frame,
+            ));
         }
 
         let slot_idx = head & self.mask;
         let Some(slot_cell) = self.slots.get(slot_idx) else {
-            return Err(RuntimeError::InvalidConfiguration(
-                "Slot index out of bounds",
+            return Err((
+                RuntimeError::InvalidConfiguration("Slot index out of bounds"),
+                frame,
             ));
         };
 
@@ -182,6 +211,11 @@ impl SpscRingBuffer {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Creates the single-producer and single-consumer endpoint views.
+    pub const fn split(&self) -> (SpscProducer<'_>, SpscConsumer<'_>) {
+        (SpscProducer { ring: self }, SpscConsumer { ring: self })
+    }
 }
 
 /// Telemetry emitted after completing a multi-tile Forward-Forward / Hebbian tick.
@@ -195,6 +229,15 @@ pub struct TickTelemetry {
     /// Final layer normalized activation L2 checksum.
     pub output_l2_norm: f32,
     /// Total cumulative ticks executed by the runtime.
+    pub total_ticks: u64,
+}
+
+/// Owned deterministic checkpoint of coordinator learning state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoordinatorSnapshot {
+    /// Row-major weights for each layer in execution order.
+    pub layer_weights: Vec<Vec<f32>>,
+    /// Number of successfully executed ticks.
     pub total_ticks: u64,
 }
 
@@ -270,9 +313,69 @@ impl ArgonCoordinator {
         self.ring_buffer.try_push(frame)
     }
 
+    /// Submits a frame and preserves its allocation if submission fails.
+    ///
+    /// # Errors
+    /// Returns the runtime error and original frame when validation or enqueue fails.
+    pub fn submit_frame_recover(
+        &self,
+        frame: ControlFrame,
+    ) -> Result<(), (RuntimeError, ControlFrame)> {
+        if frame.features.len() != self.tile_dim {
+            let actual = frame.features.len();
+            return Err((
+                RuntimeError::Kernel(KernelError::DimensionMismatch {
+                    expected: self.tile_dim,
+                    actual,
+                }),
+                frame,
+            ));
+        }
+        self.ring_buffer.try_push_recover(frame)
+    }
+
     /// Returns the sensory and action dimension expected by this coordinator.
     pub const fn tile_dim(&self) -> usize {
         self.tile_dim
+    }
+
+    /// Returns a deterministic owned checkpoint of all learned state.
+    pub fn snapshot(&self) -> CoordinatorSnapshot {
+        CoordinatorSnapshot {
+            layer_weights: self
+                .tiles
+                .iter()
+                .map(|tile| tile.weights().to_vec())
+                .collect(),
+            total_ticks: self.total_ticks,
+        }
+    }
+
+    /// Restores a checkpoint into existing preallocated tile storage.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] when layer count, weight dimensions, or values
+    /// do not match the coordinator.
+    pub fn restore(&mut self, snapshot: &CoordinatorSnapshot) -> Result<(), RuntimeError> {
+        if snapshot.layer_weights.len() != self.tiles.len() {
+            return Err(RuntimeError::InvalidConfiguration(
+                "snapshot layer count does not match coordinator",
+            ));
+        }
+        for (tile, weights) in self.tiles.iter_mut().zip(&snapshot.layer_weights) {
+            tile.restore_weights(weights)?;
+        }
+        self.total_ticks = snapshot.total_ticks;
+        Ok(())
+    }
+
+    /// Returns a deterministic checksum across every resident layer.
+    pub fn weight_checksum(&self) -> u64 {
+        self.tiles
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |acc, tile| {
+                acc.rotate_left(7) ^ tile.weight_checksum()
+            })
     }
 
     /// Drains and executes a single frame from the ingress ring buffer across all resident SRAM tiles.
@@ -357,6 +460,26 @@ impl ArgonCoordinator {
             tile.scale_weights_to_norm(target_norm)?;
         }
         Ok(())
+    }
+}
+
+impl SpscProducer<'_> {
+    /// Enqueues a frame, returning it to the caller on failure.
+    ///
+    /// # Errors
+    /// Returns the queue error and unconsumed frame when the queue is full.
+    pub fn try_push(&self, frame: ControlFrame) -> Result<(), (RuntimeError, ControlFrame)> {
+        self.ring.try_push_recover(frame)
+    }
+}
+
+impl SpscConsumer<'_> {
+    /// Dequeues one ready frame.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError::RingBufferEmpty`] when no frame is ready.
+    pub fn try_pop(&self) -> Result<ControlFrame, RuntimeError> {
+        self.ring.try_pop()
     }
 }
 

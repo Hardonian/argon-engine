@@ -8,6 +8,7 @@ use argon_runtime::ArgonCoordinator;
 fn high_energy_shock_converges_without_divergence() -> Result<(), MediumError> {
     let config = MediumConfig {
         energy_boundary: 2.0,
+        energy_release_boundary: 1.5,
         max_torque: 0.02,
         ..MediumConfig::default()
     };

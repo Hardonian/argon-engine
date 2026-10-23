@@ -365,6 +365,38 @@ impl SramTileSimulator {
         &self.sram_weights
     }
 
+    /// Replaces all resident weights without reallocating tile storage.
+    ///
+    /// # Errors
+    /// Returns [`KernelError::DimensionMismatch`] when the snapshot shape does
+    /// not match this tile, or [`KernelError::InvalidHyperparameter`] when a
+    /// weight is non-finite.
+    pub fn restore_weights(&mut self, weights: &[f32]) -> Result<(), KernelError> {
+        if weights.len() != self.sram_weights.len() {
+            return Err(KernelError::DimensionMismatch {
+                expected: self.sram_weights.len(),
+                actual: weights.len(),
+            });
+        }
+        if weights.iter().any(|weight| !weight.is_finite()) {
+            return Err(KernelError::InvalidHyperparameter(
+                "all restored weights must be finite",
+            ));
+        }
+        self.sram_weights.copy_from_slice(weights);
+        Ok(())
+    }
+
+    /// Returns a deterministic bitwise checksum of the resident weights.
+    pub fn weight_checksum(&self) -> u64 {
+        let mut checksum = 0xcbf2_9ce4_8422_2325_u64;
+        for &weight in &self.sram_weights {
+            checksum ^= u64::from(weight.to_bits());
+            checksum = checksum.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        checksum
+    }
+
     /// Returns the total number of fused steps executed inside this persistent tile.
     pub const fn cumulative_steps(&self) -> u64 {
         self.cumulative_steps
