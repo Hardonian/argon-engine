@@ -170,14 +170,14 @@ pub unsafe extern "C" fn argon_engine_weight_checksum(
     if handle.is_null() || out_checksum.is_null() {
         return ArgonStatus::NullPointer;
     }
-    let res = std::panic::catch_unwind(|| {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let engine = unsafe { &*handle };
         let checksum = engine.coordinator.weight_checksum();
         unsafe {
             *out_checksum = checksum;
         }
         ArgonStatus::Ok
-    });
+    }));
     res.unwrap_or(ArgonStatus::InternalPanic)
 }
 
@@ -262,7 +262,7 @@ pub unsafe extern "C" fn argon_engine_restore_weights(
             return ArgonStatus::DimensionMismatch;
         }
         let mut offset = 0;
-        let mut new_snapshot = snapshot.clone();
+        let mut new_snapshot = snapshot;
         for layer in &mut new_snapshot.layer_weights {
             let src = unsafe { slice::from_raw_parts(in_weights.add(offset), layer.len()) };
             layer.copy_from_slice(src);

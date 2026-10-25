@@ -32,3 +32,16 @@
   stays local, loopback, and credential-free.
 - Protected release publishing for crates.io and npm artifacts on version tags (`v*`)
   with ownership token safeguards and dry-run verification.
+
+## P3 — autonomous closed-loop and heterogeneous orchestration (implemented)
+
+- Extended C-ABI FFI boundary (`argon_engine_weight_checksum`, `argon_engine_scale_weights`,
+  `argon_engine_export_weights`, `argon_engine_restore_weights`) in `crates/argon-ffi` and
+  `include/argon.h` with complete C smoke test verification.
+- Zero-copy Python and NumPy native bindings (`bindings/python`) supporting direct array sharing,
+  homeostatic weight scaling, deterministic weight checksumming, and bit-exact golden-vector parity.
+- Telemetry streaming persistence (`TelemetryLogWriter`, `TelemetryLogReader`) in `crates/argon-io`
+  with zero allocations during the sensory-control tick loop, `ARGONLOG` binary headers, and replay verification.
+- Cross-backend numerical parity CLI command (`argon-cli verify-parity`) validating scalar CPU,
+  Vulkan, Metal, and ROCm against canonical golden vectors across text, JSON, and CSV output formats.
+

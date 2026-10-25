@@ -3,10 +3,11 @@
 #![forbid(non_ascii_idents)]
 
 use argon_backend::{
-    AcceleratedCapabilities, CudaCapabilities, LocalAiStack, LocalHardware, LocalStackKind,
+    AcceleratedCapabilities, CudaCapabilities, ExecutionBackend, LocalAiStack, LocalHardware,
+    LocalStackKind, MetalBackend, RocmBackend, VulkanBackend,
 };
 use argon_ffi::ARGON_ABI_VERSION;
-use argon_kernel::{PersistentGridConfig, PlasticityConfig};
+use argon_kernel::{PersistentGridConfig, PlasticityConfig, SramTileSimulator};
 use argon_medium::{CoupledOscillatorMedium, MediumConfig};
 use argon_runtime::{ArgonCoordinator, ControlFrame};
 use std::env;
@@ -31,6 +32,7 @@ enum Command {
     Pull,
     Unload,
     ModelInfo,
+    VerifyParity,
     Replay,
 }
 
@@ -93,6 +95,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::Pull => pull(&options)?,
         Command::Unload => unload(&options)?,
         Command::ModelInfo => model_info(&options)?,
+        Command::VerifyParity => verify_parity(options.format)?,
         Command::Replay => replay(&options)?,
         Command::Bench | Command::Run => {
             let report = execute(&options)?;
@@ -107,7 +110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn print_help() {
     println!(
-        "Usage: argon-cli [bench|run|inspect|doctor|models|complete|pull|unload|model-info|replay FILE] [--medium] \
+        "Usage: argon-cli [bench|run|inspect|doctor|models|complete|pull|unload|model-info|verify-parity|replay FILE] [--medium] \
          [--iterations N] [--warmup N] [--scenario equilibrium|shock|sustained] \
          [--format text|json|csv] [--record FILE] [--local-stack auto|ollama|llama-cpp|lm-studio|openai-compatible] \
          [--endpoint http://127.0.0.1:PORT] [--model MODEL] [--prompt TEXT] [--max-tokens N] \
@@ -295,6 +298,185 @@ fn model_info(options: &Options) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct ParityResult {
+    name: &'static str,
+    passed: bool,
+    max_delta: f32,
+    goodness_delta: f32,
+    output: [f32; 4],
+    weight_checksum: u64,
+}
+
+fn verify_parity(format: OutputFormat) -> Result<(), Box<dyn Error>> {
+    let grid = PersistentGridConfig {
+        grid_dim_x: 1,
+        block_dim_x: 32,
+        shared_mem_bytes: 1_024,
+        tile_dim: 4,
+    };
+    let mut initial_weights = vec![0.0_f32; 16];
+    for index in 0..4 {
+        initial_weights[index * 4 + index] = 0.5;
+    }
+    let plasticity = PlasticityConfig {
+        learning_rate: 0.01,
+        goodness_threshold: 1.0,
+        weight_decay: 0.001,
+        phase_polarity: 1.0,
+    };
+    let input = [0.1_f32, 0.2, 0.3, 0.4];
+    let golden = [0.365_145_7_f32, 0.730_291_4, 1.095_437_2, 1.460_582_9];
+    let expected_goodness = 0.018_75_f32;
+
+    let mut results = Vec::new();
+
+    // 1. Scalar CPU SramTileSimulator
+    {
+        let mut sim = SramTileSimulator::new(&grid, &initial_weights)?;
+        let mut out = [0.0_f32; 4];
+        let goodness = sim.step_in_sram(&input, &mut out, &plasticity)?;
+        let max_delta = out
+            .iter()
+            .zip(&golden)
+            .fold(0.0_f32, |acc, (&a, &b)| acc.max((a - b).abs()));
+        let goodness_delta = (goodness - expected_goodness).abs();
+        let passed = max_delta < 2.0e-6 && goodness_delta < 1.0e-6;
+        results.push(ParityResult {
+            name: "scalar-cpu",
+            passed,
+            max_delta,
+            goodness_delta,
+            output: out,
+            weight_checksum: sim.weight_checksum(),
+        });
+    }
+
+    // 2. Vulkan backend
+    {
+        let mut vulkan = VulkanBackend::new(4, &initial_weights, plasticity)?;
+        let mut out = [0.0_f32; 4];
+        let telemetry = vulkan.step(1, 1.0, &input, &mut out)?;
+        let max_delta = out
+            .iter()
+            .zip(&golden)
+            .fold(0.0_f32, |acc, (&a, &b)| acc.max((a - b).abs()));
+        let goodness_delta = (telemetry.mean_goodness - expected_goodness).abs();
+        let passed = max_delta < 2.0e-6 && goodness_delta < 1.0e-6;
+        results.push(ParityResult {
+            name: "vulkan",
+            passed,
+            max_delta,
+            goodness_delta,
+            output: out,
+            weight_checksum: vulkan.weight_checksum(),
+        });
+    }
+
+    // 3. Apple Metal backend
+    {
+        let mut metal = MetalBackend::new(4, &initial_weights, plasticity)?;
+        let mut out = [0.0_f32; 4];
+        let telemetry = metal.step(1, 1.0, &input, &mut out)?;
+        let max_delta = out
+            .iter()
+            .zip(&golden)
+            .fold(0.0_f32, |acc, (&a, &b)| acc.max((a - b).abs()));
+        let goodness_delta = (telemetry.mean_goodness - expected_goodness).abs();
+        let passed = max_delta < 2.0e-6 && goodness_delta < 1.0e-6;
+        results.push(ParityResult {
+            name: "metal",
+            passed,
+            max_delta,
+            goodness_delta,
+            output: out,
+            weight_checksum: metal.weight_checksum(),
+        });
+    }
+
+    // 4. AMD ROCm backend
+    {
+        let mut rocm = RocmBackend::new(4, &initial_weights, plasticity)?;
+        let mut out = [0.0_f32; 4];
+        let telemetry = rocm.step(1, 1.0, &input, &mut out)?;
+        let max_delta = out
+            .iter()
+            .zip(&golden)
+            .fold(0.0_f32, |acc, (&a, &b)| acc.max((a - b).abs()));
+        let goodness_delta = (telemetry.mean_goodness - expected_goodness).abs();
+        let passed = max_delta < 2.0e-6 && goodness_delta < 1.0e-6;
+        results.push(ParityResult {
+            name: "rocm",
+            passed,
+            max_delta,
+            goodness_delta,
+            output: out,
+            weight_checksum: rocm.weight_checksum(),
+        });
+    }
+
+    report_parity_results(&results, format)
+}
+
+fn report_parity_results(
+    results: &[ParityResult],
+    format: OutputFormat,
+) -> Result<(), Box<dyn Error>> {
+    let all_passed = results.iter().all(|r| r.passed);
+    match format {
+        OutputFormat::Text => {
+            println!("=== Argon Engine Cross-Backend Numerical Parity Verification ===");
+            for res in results {
+                let status_str = if res.passed { "PASSED" } else { "FAILED" };
+                println!(
+                    "backend={:<10} status={:<7} max_activation_delta={:.8} goodness_delta={:.8} weight_checksum={:#018x}",
+                    res.name, status_str, res.max_delta, res.goodness_delta, res.weight_checksum
+                );
+            }
+            if all_passed {
+                println!(
+                    "All 4 compute backends strictly conform to ADR-0001 golden-vector tolerances."
+                );
+            } else {
+                return Err("one or more backends failed golden-vector parity check".into());
+            }
+        }
+        OutputFormat::Json => {
+            print!("{{\"all_passed\":{all_passed},\"backends\":[");
+            for (idx, res) in results.iter().enumerate() {
+                if idx > 0 {
+                    print!(",");
+                }
+                print!(
+                    "{{\"name\":\"{}\",\"passed\":{},\"max_delta\":{:.8},\"goodness_delta\":{:.8},\"weight_checksum\":\"{:#018x}\",\"output\":{:?}}}",
+                    res.name, res.passed, res.max_delta, res.goodness_delta, res.weight_checksum, res.output
+                );
+            }
+            println!("]}}");
+            if !all_passed {
+                return Err("one or more backends failed golden-vector parity check".into());
+            }
+        }
+        OutputFormat::Csv => {
+            println!("backend,status,max_activation_delta,goodness_delta,weight_checksum");
+            for res in results {
+                println!(
+                    "{},{},{:.8},{:.8},{:#018x}",
+                    res.name,
+                    if res.passed { "PASSED" } else { "FAILED" },
+                    res.max_delta,
+                    res.goodness_delta,
+                    res.weight_checksum
+                );
+            }
+            if !all_passed {
+                return Err("one or more backends failed golden-vector parity check".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn selected_stack(options: &Options) -> Result<LocalAiStack, Box<dyn Error>> {
     if options.local_stack == LocalStackKind::Auto {
         Ok(LocalAiStack::discover()
@@ -326,6 +508,7 @@ fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
             "pull" => Command::Pull,
             "unload" => Command::Unload,
             "model-info" | "info" => Command::ModelInfo,
+            "verify-parity" | "parity" => Command::VerifyParity,
             "replay" => Command::Replay,
             _ => return Err(format!("unknown command: {command}").into()),
         };
