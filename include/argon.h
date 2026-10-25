@@ -39,6 +39,15 @@ ArgonStatus argon_engine_step_zero_copy(
     ArgonEngineHandle *handle, uint64_t sequence_id, float phase_polarity,
     const float *input_ptr, size_t input_len, float *output_ptr,
     size_t output_len, ArgonTickTelemetry *out_telemetry);
+ArgonStatus argon_engine_weight_checksum(const ArgonEngineHandle *handle,
+                                         uint64_t *out_checksum);
+ArgonStatus argon_engine_scale_weights(ArgonEngineHandle *handle,
+                                       float target_norm);
+ArgonStatus argon_engine_export_weights(const ArgonEngineHandle *handle,
+                                        float *out_weights, size_t max_len,
+                                        size_t *out_written);
+ArgonStatus argon_engine_restore_weights(ArgonEngineHandle *handle,
+                                         const float *in_weights, size_t len);
 ArgonStatus argon_engine_destroy(ArgonEngineHandle *handle);
 
 #ifdef __cplusplus
