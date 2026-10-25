@@ -157,6 +157,125 @@ pub unsafe extern "C" fn argon_engine_step_zero_copy(
     }
 }
 
+/// Computes the deterministic bitwise checksum of all resident synaptic weights.
+///
+/// # Safety
+/// - `handle` must be a valid pointer allocated by [`argon_engine_create`].
+/// - `out_checksum` must be a valid, non-null pointer to a `u64`.
+#[no_mangle]
+pub unsafe extern "C" fn argon_engine_weight_checksum(
+    handle: *const ArgonEngineHandle,
+    out_checksum: *mut u64,
+) -> ArgonStatus {
+    if handle.is_null() || out_checksum.is_null() {
+        return ArgonStatus::NullPointer;
+    }
+    let res = std::panic::catch_unwind(|| {
+        let engine = unsafe { &*handle };
+        let checksum = engine.coordinator.weight_checksum();
+        unsafe {
+            *out_checksum = checksum;
+        }
+        ArgonStatus::Ok
+    });
+    res.unwrap_or(ArgonStatus::InternalPanic)
+}
+
+/// Rescales synaptic weights according to local homeostatic target norm.
+///
+/// # Safety
+/// `handle` must be a valid pointer allocated by [`argon_engine_create`].
+#[no_mangle]
+pub unsafe extern "C" fn argon_engine_scale_weights(
+    handle: *mut ArgonEngineHandle,
+    target_norm: f32,
+) -> ArgonStatus {
+    if handle.is_null() {
+        return ArgonStatus::NullPointer;
+    }
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let engine = unsafe { &mut *handle };
+        match engine.coordinator.apply_homeostasis(target_norm) {
+            Ok(()) => ArgonStatus::Ok,
+            Err(_) => ArgonStatus::InvalidConfig,
+        }
+    }));
+    res.unwrap_or(ArgonStatus::InternalPanic)
+}
+
+/// Exports all resident synaptic weights into caller-allocated memory.
+///
+/// # Safety
+/// - `handle` must be a valid pointer allocated by [`argon_engine_create`].
+/// - `out_weights` must point to contiguous buffer of at least `max_len` `f32` elements.
+/// - `out_written` must be a valid, non-null pointer to `usize`.
+#[no_mangle]
+pub unsafe extern "C" fn argon_engine_export_weights(
+    handle: *const ArgonEngineHandle,
+    out_weights: *mut f32,
+    max_len: usize,
+    out_written: *mut usize,
+) -> ArgonStatus {
+    if handle.is_null() || out_weights.is_null() || out_written.is_null() {
+        return ArgonStatus::NullPointer;
+    }
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let engine = unsafe { &*handle };
+        let snapshot = engine.coordinator.snapshot();
+        let total_len: usize = snapshot.layer_weights.iter().map(Vec::len).sum();
+        if max_len < total_len {
+            return ArgonStatus::DimensionMismatch;
+        }
+        let mut offset = 0;
+        for layer in &snapshot.layer_weights {
+            let dest = unsafe { slice::from_raw_parts_mut(out_weights.add(offset), layer.len()) };
+            dest.copy_from_slice(layer);
+            offset += layer.len();
+        }
+        unsafe {
+            *out_written = total_len;
+        }
+        ArgonStatus::Ok
+    }));
+    res.unwrap_or(ArgonStatus::InternalPanic)
+}
+
+/// Restores synaptic weights from caller-provided contiguous memory.
+///
+/// # Safety
+/// - `handle` must be a valid pointer allocated by [`argon_engine_create`].
+/// - `in_weights` must point to contiguous slice of `len` valid `f32` values.
+#[no_mangle]
+pub unsafe extern "C" fn argon_engine_restore_weights(
+    handle: *mut ArgonEngineHandle,
+    in_weights: *const f32,
+    len: usize,
+) -> ArgonStatus {
+    if handle.is_null() || in_weights.is_null() {
+        return ArgonStatus::NullPointer;
+    }
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let engine = unsafe { &mut *handle };
+        let snapshot = engine.coordinator.snapshot();
+        let expected_len: usize = snapshot.layer_weights.iter().map(Vec::len).sum();
+        if len != expected_len {
+            return ArgonStatus::DimensionMismatch;
+        }
+        let mut offset = 0;
+        let mut new_snapshot = snapshot.clone();
+        for layer in &mut new_snapshot.layer_weights {
+            let src = unsafe { slice::from_raw_parts(in_weights.add(offset), layer.len()) };
+            layer.copy_from_slice(src);
+            offset += layer.len();
+        }
+        match engine.coordinator.restore(&new_snapshot) {
+            Ok(()) => ArgonStatus::Ok,
+            Err(_) => ArgonStatus::InvalidConfig,
+        }
+    }));
+    res.unwrap_or(ArgonStatus::InternalPanic)
+}
+
 /// Frees an [`ArgonEngineHandle`] previously allocated by [`argon_engine_create`].
 ///
 /// # Safety
@@ -182,7 +301,6 @@ mod tests {
     fn test_ffi_lifecycle_and_zero_copy_step() {
         assert_eq!(argon_engine_abi_version(), 1);
         let mut handle: *mut ArgonEngineHandle = ptr::null_mut();
-        // Uses &raw mut to comply with clippy::borrow_as_ptr in Rust 1.82+ and 1.96+
         let status = unsafe { argon_engine_create(2, 8, 0.03, 2.0, 0.001, 8, &raw mut handle) };
         assert_eq!(status, ArgonStatus::Ok);
         assert!(!handle.is_null());
@@ -211,6 +329,38 @@ mod tests {
         assert_eq!(step_status, ArgonStatus::Ok);
         assert_eq!(telemetry.sequence_id, 101);
         assert_eq!(telemetry.total_ticks, 1);
+
+        let mut checksum = 0_u64;
+        let c_status = unsafe { argon_engine_weight_checksum(handle, &raw mut checksum) };
+        assert_eq!(c_status, ArgonStatus::Ok);
+        assert_ne!(checksum, 0);
+
+        // Export weights (2 layers * 8 * 8 = 128 floats)
+        let mut weights_buf = [0.0_f32; 128];
+        let mut written = 0_usize;
+        let exp_status = unsafe {
+            argon_engine_export_weights(
+                handle,
+                weights_buf.as_mut_ptr(),
+                weights_buf.len(),
+                &raw mut written,
+            )
+        };
+        assert_eq!(exp_status, ArgonStatus::Ok);
+        assert_eq!(written, 128);
+
+        // Scale weights
+        let scale_status = unsafe { argon_engine_scale_weights(handle, 2.5) };
+        assert_eq!(scale_status, ArgonStatus::Ok);
+
+        // Restore saved weights
+        let rest_status =
+            unsafe { argon_engine_restore_weights(handle, weights_buf.as_ptr(), written) };
+        assert_eq!(rest_status, ArgonStatus::Ok);
+
+        let mut restored_checksum = 0_u64;
+        let _ = unsafe { argon_engine_weight_checksum(handle, &raw mut restored_checksum) };
+        assert_eq!(restored_checksum, checksum);
 
         let destroy_status = unsafe { argon_engine_destroy(handle) };
         assert_eq!(destroy_status, ArgonStatus::Ok);
