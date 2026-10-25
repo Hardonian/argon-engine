@@ -2,7 +2,9 @@
 
 #![forbid(non_ascii_idents)]
 
-use argon_backend::{CudaCapabilities, LocalAiStack, LocalHardware, LocalStackKind};
+use argon_backend::{
+    AcceleratedCapabilities, CudaCapabilities, LocalAiStack, LocalHardware, LocalStackKind,
+};
 use argon_ffi::ARGON_ABI_VERSION;
 use argon_kernel::{PersistentGridConfig, PlasticityConfig};
 use argon_medium::{CoupledOscillatorMedium, MediumConfig};
@@ -10,6 +12,7 @@ use argon_runtime::{ArgonCoordinator, ControlFrame};
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -25,6 +28,9 @@ enum Command {
     Doctor,
     Models,
     Complete,
+    Pull,
+    Unload,
+    ModelInfo,
     Replay,
 }
 
@@ -58,6 +64,8 @@ struct Options {
     model: Option<String>,
     prompt: Option<String>,
     max_tokens: u32,
+    stream: bool,
+    api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,6 +90,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::Doctor => doctor(&options)?,
         Command::Models => list_models(&options)?,
         Command::Complete => complete(&options)?,
+        Command::Pull => pull(&options)?,
+        Command::Unload => unload(&options)?,
+        Command::ModelInfo => model_info(&options)?,
         Command::Replay => replay(&options)?,
         Command::Bench | Command::Run => {
             let report = execute(&options)?;
@@ -96,17 +107,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn print_help() {
     println!(
-        "Usage: argon-cli [bench|run|inspect|doctor|models|complete|replay FILE] [--medium] \
+        "Usage: argon-cli [bench|run|inspect|doctor|models|complete|pull|unload|model-info|replay FILE] [--medium] \
          [--iterations N] [--warmup N] [--scenario equilibrium|shock|sustained] \
          [--format text|json|csv] [--record FILE] [--local-stack auto|ollama|llama-cpp|lm-studio|openai-compatible] \
          [--endpoint http://127.0.0.1:PORT] [--model MODEL] [--prompt TEXT] [--max-tokens N] \
-         [--allow-non-loopback] [--config FILE]"
+         [--stream] [--api-key KEY] [--allow-non-loopback] [--config FILE]"
     );
 }
 
 fn print_inspection(format: OutputFormat) {
     let cuda = CudaCapabilities::probe();
     let hardware = LocalHardware::probe();
+    let accelerated = AcceleratedCapabilities::probe();
     let cuda_devices = cuda
         .as_ref()
         .map_or(0, |capabilities| capabilities.devices.len());
@@ -114,6 +126,13 @@ fn print_inspection(format: OutputFormat) {
     match format {
         OutputFormat::Text => {
             println!("argon_version={} abi_version={} cpu=true wasm=true cuda_devices={cuda_devices} cuda_runtime=false local_stack={}", env!("CARGO_PKG_VERSION"), ARGON_ABI_VERSION, local_stack.as_ref().map_or("none", |stack| match stack.kind { LocalStackKind::Ollama => "ollama", LocalStackKind::LlamaCpp => "llama-cpp", LocalStackKind::LmStudio => "lm-studio", LocalStackKind::OpenAiCompatible => "openai-compatible", LocalStackKind::Auto => "auto" }));
+            println!(
+                "accelerated vulkan={} metal={} rocm={} platforms=[{}]",
+                accelerated.vulkan_available,
+                accelerated.metal_available,
+                accelerated.rocm_available,
+                accelerated.detected_platforms.join(", ")
+            );
             for gpu in &hardware.gpus {
                 println!(
                     "gpu name={} vram_mib={} tier={:?} guidance={}",
@@ -126,7 +145,7 @@ fn print_inspection(format: OutputFormat) {
             }
         }
         OutputFormat::Json => {
-            println!("{{\"argon_version\":\"{}\",\"abi_version\":{},\"cpu\":true,\"wasm\":true,\"cuda_devices\":{},\"cuda_runtime\":false,\"local_stack\":{},\"gpus\":[{}]}}", env!("CARGO_PKG_VERSION"), ARGON_ABI_VERSION, cuda_devices, local_stack.as_ref().map_or_else(|| "null".to_owned(), |stack| format!("\"{}\"", stack.endpoint.url())), hardware.gpus.iter().map(|gpu| format!("{{\"name\":\"{}\",\"vram_mib\":{},\"tier\":\"{:?}\"}}", gpu.name.replace('"', "\\\""), gpu.memory_mib.map_or_else(|| "null".to_owned(), |memory| memory.to_string()), gpu.tier)).collect::<Vec<_>>().join(","));
+            println!("{{\"argon_version\":\"{}\",\"abi_version\":{},\"cpu\":true,\"wasm\":true,\"cuda_devices\":{},\"cuda_runtime\":false,\"local_stack\":{},\"accelerated\":{{\"vulkan\":{},\"metal\":{},\"rocm\":{},\"platforms\":{:?}}},\"gpus\":[{}]}}", env!("CARGO_PKG_VERSION"), ARGON_ABI_VERSION, cuda_devices, local_stack.as_ref().map_or_else(|| "null".to_owned(), |stack| format!("\"{}\"", stack.endpoint.url())), accelerated.vulkan_available, accelerated.metal_available, accelerated.rocm_available, accelerated.detected_platforms, hardware.gpus.iter().map(|gpu| format!("{{\"name\":\"{}\",\"vram_mib\":{},\"tier\":\"{:?}\"}}", gpu.name.replace('"', "\\\""), gpu.memory_mib.map_or_else(|| "null".to_owned(), |memory| memory.to_string()), gpu.tier)).collect::<Vec<_>>().join(","));
         }
         OutputFormat::Csv => {
             println!("name,vram_mib,tier,guidance");
@@ -140,6 +159,10 @@ fn print_inspection(format: OutputFormat) {
                     gpu.tier.guidance()
                 );
             }
+            println!("platform,available");
+            println!("vulkan,{}", accelerated.vulkan_available);
+            println!("metal,{}", accelerated.metal_available);
+            println!("rocm,{}", accelerated.rocm_available);
         }
     }
 }
@@ -195,13 +218,78 @@ fn complete(options: &Options) -> Result<(), Box<dyn Error>> {
         .as_deref()
         .ok_or("complete requires --prompt TEXT")?;
     let stack = selected_stack(options)?;
-    let response = stack.complete(model, prompt, options.max_tokens)?;
+    if options.stream {
+        let response = stack.complete_stream(model, prompt, options.max_tokens, |chunk| {
+            if options.format == OutputFormat::Text {
+                print!("{chunk}");
+                let _ = std::io::stdout().flush();
+            }
+        })?;
+        match options.format {
+            OutputFormat::Text => println!(),
+            OutputFormat::Json => println!("{{\"response\":{response:?}}}"),
+            OutputFormat::Csv => {
+                println!("response");
+                println!("\"{}\"", response.replace('"', "\"\""));
+            }
+        }
+    } else {
+        let response = stack.complete(model, prompt, options.max_tokens)?;
+        match options.format {
+            OutputFormat::Text => println!("{response}"),
+            OutputFormat::Json => println!("{{\"response\":{response:?}}}"),
+            OutputFormat::Csv => {
+                println!("response");
+                println!("\"{}\"", response.replace('"', "\"\""));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn pull(options: &Options) -> Result<(), Box<dyn Error>> {
+    let model = options
+        .model
+        .as_deref()
+        .ok_or("pull requires --model MODEL")?;
+    let stack = selected_stack(options)?;
+    stack.pull_model(model)?;
     match options.format {
-        OutputFormat::Text => println!("{response}"),
-        OutputFormat::Json => println!("{{\"response\":{response:?}}}"),
+        OutputFormat::Text => println!("model={model} status=pulled"),
+        OutputFormat::Json => println!("{{\"model\":\"{model}\",\"status\":\"pulled\"}}"),
+        OutputFormat::Csv => println!("model,status\n\"{model}\",pulled"),
+    }
+    Ok(())
+}
+
+fn unload(options: &Options) -> Result<(), Box<dyn Error>> {
+    let model = options
+        .model
+        .as_deref()
+        .ok_or("unload requires --model MODEL")?;
+    let stack = selected_stack(options)?;
+    stack.unload_model(model)?;
+    match options.format {
+        OutputFormat::Text => println!("model={model} status=unloaded"),
+        OutputFormat::Json => println!("{{\"model\":\"{model}\",\"status\":\"unloaded\"}}"),
+        OutputFormat::Csv => println!("model,status\n\"{model}\",unloaded"),
+    }
+    Ok(())
+}
+
+fn model_info(options: &Options) -> Result<(), Box<dyn Error>> {
+    let model = options
+        .model
+        .as_deref()
+        .ok_or("model-info requires --model MODEL")?;
+    let stack = selected_stack(options)?;
+    let info = stack.model_info(model)?;
+    match options.format {
+        OutputFormat::Text => println!("model={model} info={info}"),
+        OutputFormat::Json => println!("{info}"),
         OutputFormat::Csv => {
-            println!("response");
-            println!("\"{}\"", response.replace('"', "\"\""));
+            println!("model,info");
+            println!("\"{model}\",\"{}\"", info.to_string().replace('"', "\"\""));
         }
     }
     Ok(())
@@ -212,10 +300,11 @@ fn selected_stack(options: &Options) -> Result<LocalAiStack, Box<dyn Error>> {
         Ok(LocalAiStack::discover()
             .ok_or("no supported local model server responded on loopback")?)
     } else {
-        Ok(LocalAiStack::new(
+        Ok(LocalAiStack::new_authenticated(
             options.local_stack,
             options.endpoint.as_deref(),
             options.allow_non_loopback,
+            options.api_key.clone(),
         )?)
     }
 }
@@ -234,6 +323,9 @@ fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
             "doctor" => Command::Doctor,
             "models" => Command::Models,
             "complete" => Command::Complete,
+            "pull" => Command::Pull,
+            "unload" => Command::Unload,
+            "model-info" | "info" => Command::ModelInfo,
             "replay" => Command::Replay,
             _ => return Err(format!("unknown command: {command}").into()),
         };
@@ -305,6 +397,11 @@ fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
                 options.max_tokens =
                     u32::try_from(parse_positive(&expanded, index, "--max-tokens")?)?;
             }
+            "--stream" => options.stream = true,
+            "--api-key" => {
+                index += 1;
+                options.api_key = Some(value_at(&expanded, index, "--api-key")?.to_owned());
+            }
             value => return Err(format!("unknown argument: {value}").into()),
         }
         index += 1;
@@ -328,6 +425,8 @@ const fn default_options() -> Options {
         model: None,
         prompt: None,
         max_tokens: 256,
+        stream: false,
+        api_key: None,
     }
 }
 
@@ -538,6 +637,8 @@ fn replay(options: &Options) -> Result<(), Box<dyn Error>> {
         model: None,
         prompt: None,
         max_tokens: 256,
+        stream: false,
+        api_key: None,
     };
     replay_options.format = OutputFormat::Text;
     let report = execute(&replay_options)?;

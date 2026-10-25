@@ -44,10 +44,15 @@ cargo run -p argon-cli -- inspect --format text
 cargo run -p argon-cli -- doctor --local-stack ollama
 cargo run -p argon-cli -- doctor --local-stack llama-cpp --endpoint http://127.0.0.1:8080
 cargo run -p argon-cli -- models --local-stack lm-studio
-cargo run -p argon-cli -- complete --local-stack ollama --model qwen3:8b --prompt "Summarize this control trace"
+cargo run -p argon-cli -- complete --local-stack ollama --model qwen3:8b --prompt "Summarize this control trace" --stream
+cargo run -p argon-cli -- pull --local-stack ollama --model qwen3:8b
+cargo run -p argon-cli -- unload --local-stack ollama --model qwen3:8b
+cargo run -p argon-cli -- model-info --local-stack ollama --model qwen3:8b
 ```
 
-`inspect` reports visible NVIDIA VRAM and a conservative local-model tier;
+`inspect` reports visible NVIDIA VRAM, accelerated platforms (Vulkan, Metal, ROCm), and conservative local-model guidance;
 `doctor` verifies that the selected server responds; `models` lists available
-models; and `complete` sends a prompt to its native local API. Remote or LAN endpoints are rejected unless
+models; `complete` sends a prompt to its native local API (supporting `--stream`);
+`pull`, `unload`, and `model-info` manage model lifecycles; and `--api-key` enables
+authenticated endpoints. Remote or LAN endpoints are rejected unless
 `--allow-non-loopback` is deliberately supplied.

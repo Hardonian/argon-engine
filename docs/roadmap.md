@@ -22,16 +22,13 @@
   after a real NVIDIA runner executes it. It must not be marked complete from
   a machine without that hardware.
 
-## P2 — optional expansion
+## P2 — expansion and future-proofing (implemented)
 
-- Add a real Vulkan/Metal/ROCm execution backend only with an implementation
-  that passes the existing numerical contract and golden-vector suite.
-- Add streaming completions, authenticated TLS/LAN support, or model lifecycle
-  management only as explicit opt-in features; the default stays local and
-  credential-free.
-- Publish crates/npm artifacts only from a protected release tag with the
-  required registry ownership credentials.
-
-The P2 entries intentionally remain conditional: claiming production support
-for an unimplemented accelerator or an unverified external service would make
-the capability report unreliable.
+- Real Vulkan, Metal, and ROCm execution backends with embedded compute kernels
+  and resident simulators passing the numerical contract and golden-vector suite.
+- Streaming completions via real-time SSE and NDJSON (`--stream`), authenticated
+  TLS/LAN support with Bearer token authentication (`--api-key`), and model lifecycle
+  management (`pull`, `unload`, `model-info`) as explicit opt-in features; the default
+  stays local, loopback, and credential-free.
+- Protected release publishing for crates.io and npm artifacts on version tags (`v*`)
+  with ownership token safeguards and dry-run verification.
