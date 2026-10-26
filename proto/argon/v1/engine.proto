@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package argon.v1;
+
+option go_package = "github.com/hardonian/argon-engine/proto/argon/v1;argonv1";
+option java_multiple_files = true;
+option java_package = "ai.argon.v1";
+
+// Sensory frame passed into Argon neural coordinator.
+message SensoryFrame {
+  uint64 sequence_id = 1;
+  float phase_polarity = 2;
+  repeated float features = 3;
+  uint64 timestamp_ns = 4;
+}
+
+// Normalized activation vector and control action emitted by the engine.
+message ControlAction {
+  uint64 sequence_id = 1;
+  repeated float activations = 2;
+  float energy_l2 = 3;
+  TickTelemetry telemetry = 4;
+}
+
+// Compact telemetry emitted after completing a Forward-Forward / Hebbian tick.
+message TickTelemetry {
+  uint64 sequence_id = 1;
+  float mean_goodness = 2;
+  float output_l2_norm = 3;
+  uint64 total_ticks = 4;
+  uint32 queue_depth = 5;
+}
+
+// Request to compute deterministic bitwise checksum of resident weights.
+message WeightChecksumRequest {}
+
+// Response containing deterministic 64-bit weight checksum.
+message WeightChecksumResponse {
+  uint64 checksum = 1;
+}
+
+// Request to rescale weights toward target homeostatic norm.
+message ScaleWeightsRequest {
+  float target_norm = 1;
+}
+
+// Response from homeostatic scaling.
+message ScaleWeightsResponse {
+  bool success = 1;
+  uint64 new_checksum = 2;
+}
+
+// Request to export all synaptic weights.
+message ExportWeightsRequest {}
+
+// Synaptic weights exported in contiguous row-major order.
+message ExportWeightsResponse {
+  repeated float weights = 1;
+  uint64 checksum = 2;
+  uint32 tile_dim = 3;
+  uint32 num_layers = 4;
+}
+
+// Bi-directional streaming request.
+message StreamClosedLoopRequest {
+  oneof payload {
+    SensoryFrame frame = 1;
+    ScaleWeightsRequest scale = 2;
+  }
+}
+
+// Bi-directional streaming response.
+message StreamClosedLoopResponse {
+  oneof payload {
+    ControlAction action = 1;
+    ScaleWeightsResponse scale_result = 2;
+  }
+}
+
+// Argon execution service for nanosecond-latency neuromorphic compute.
+service ArgonService {
+  // Executes one synchronous Forward-Forward inference and plasticity tick.
+  rpc Step(SensoryFrame) returns (ControlAction);
+
+  // Computes the deterministic bitwise checksum of resident weights.
+  rpc GetWeightChecksum(WeightChecksumRequest) returns (WeightChecksumResponse);
+
+  // Rescales resident synaptic weights to satisfy homeostatic target norm.
+  rpc ScaleWeights(ScaleWeightsRequest) returns (ScaleWeightsResponse);
+
+  // Exports resident layer weights.
+  rpc ExportWeights(ExportWeightsRequest) returns (ExportWeightsResponse);
+
+  // Bi-directional hardware-in-the-loop streaming session.
+  rpc StreamClosedLoop(stream StreamClosedLoopRequest) returns (stream StreamClosedLoopResponse);
+}
