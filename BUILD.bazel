@@ -1,0 +1,25 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Canonical C-ABI header library
+cc_library(
+    name = "argon_c_header",
+    hdrs = ["include/argon.h"],
+    includes = ["include"],
+)
+
+# Canonical Protocol Buffers schema
+proto_library(
+    name = "argon_proto",
+    srcs = ["proto/argon/v1/engine.proto"],
+)
+
+# Python zero-copy bindings
+py_library(
+    name = "argon_python",
+    srcs = glob(["bindings/python/argon_engine/**/*.py"]),
+    imports = ["bindings/python"],
+)

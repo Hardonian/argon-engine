@@ -1,0 +1,53 @@
+# Multi-stage production container for Google Cloud Vertex AI & Cloud Run
+# Optimized for nanosecond inference, minimal surface area, and non-root execution.
+
+# --- Stage 1: Build Rust FFI and Binaries ---
+FROM rust:1.80-slim as builder
+
+WORKDIR /build
+
+# Copy manifest and dependencies
+COPY Cargo.toml Cargo.lock rust-toolchain.toml deny.toml ./
+COPY crates ./crates
+COPY include ./include
+
+# Build release cdylib
+RUN cargo build --release -p argon-ffi -p argon-cli
+
+# --- Stage 2: Minimal Production Runtime ---
+FROM python:3.11-slim
+
+WORKDIR /opt/argon
+
+# Install minimal system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install NumPy for zero-copy Python tensor bridge
+RUN pip install --no-cache-dir numpy>=1.22.0
+
+# Copy compiled shared library and CLI from builder
+COPY --from=builder /build/target/release/libargon_ffi.so /opt/argon/lib/libargon_ffi.so
+COPY --from=builder /build/target/release/argon-cli /usr/local/bin/argon-cli
+
+# Copy Python bindings and deployment handler
+COPY bindings/python /opt/argon/bindings/python
+COPY deploy /opt/argon/deploy
+COPY include /opt/argon/include
+
+# Environment variables for Vertex AI and Cloud Run
+ENV ARGON_LIB_PATH=/opt/argon/lib/libargon_ffi.so
+ENV PYTHONPATH=/opt/argon/bindings/python
+ENV AIP_HTTP_PORT=8080
+ENV PORT=8080
+
+# Run as non-root user for Google Cloud security compliance
+USER 65534:65534
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=15s --timeout=3s --retries=3 \
+    CMD curl -f http://localhost:8080/healthz || exit 1
+
+ENTRYPOINT ["python3", "/opt/argon/deploy/vertex_handler.py"]

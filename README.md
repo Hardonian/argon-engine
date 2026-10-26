@@ -1,5 +1,7 @@
 # Argon Engine (`hardonian/argon-engine`)
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/hardonian/argon-engine/blob/main/notebooks/argon_quickstart.ipynb)
+
 Low-level, data-efficient persistent SRAM AI execution engine designed for continuous, sample-efficient physical and control paradigms that bypass synchronous PyTorch/CUDA host-dispatch bottlenecks.
 
 ## Workspace Layout
@@ -10,9 +12,25 @@ Low-level, data-efficient persistent SRAM AI execution engine designed for conti
 - `crates/argon-wasm`: WebAssembly SIMD128 (`wasm32-unknown-unknown`) linear-memory ring-buffer bridge for edge and browser workers.
 - `crates/argon-cli`: Nanosecond latency benchmark harness for coordinator-only and closed-loop physical-medium execution.
 - `crates/argon-io`: Allocation-free physical-device adapter contract and deterministic hardware-in-the-loop emulator.
-- `crates/argon-backend`: Explicit CPU backend, consumer-GPU inventory, and local-only Ollama, llama.cpp, and OpenAI-compatible model-server client.
+- `crates/argon-backend`: Accelerated Vulkan, Metal, ROCm, and explicit CPU backends, GPU inventory, and local model server client.
+- `proto/argon/v1`: Canonical Google Protocol Buffers v3 and gRPC streaming contract.
 - `kernels/triton`: Persistent in-SRAM Triton micro-kernel with deterministic NumPy fallback.
+- `bindings/python`: Native zero-copy NumPy, functional JAX / TPU, and gRPC streaming service.
 - `bindings/ts`: Strict TypeScript orchestration harness (`noImplicitAny`, `noUncheckedIndexedAccess`, zero-copy `Float32Array` views).
+- `bindings/android`: Android NDK CMake and JNI bridge for edge robotics and Google Pixel devices.
+- `deploy`: Google Cloud Vertex AI and Cloud Run distroless container and prediction server.
+
+## Google Developer Ecosystem
+
+Argon integrates natively with the Google developer and cloud ecosystem:
+- **JAX / TPU**: Pure functional JAX Forward-Forward module (`argon_engine.jax`) with `jax.jit` and TPU support.
+- **Protocol Buffers & gRPC**: Bi-directional streaming RPCs in `proto/argon/v1/engine.proto`.
+- **Vertex AI & Cloud Run**: Multi-stage distroless container with `/healthz` and `/predict` handlers in `deploy/`.
+- **Google Colab**: 1-click interactive notebook in `notebooks/argon_quickstart.ipynb`.
+- **Bazel**: Hermetic Bzlmod builds via `MODULE.bazel` and `BUILD.bazel`.
+- **Android NDK**: Cross-compilation for `arm64-v8a` Pixel devices in `bindings/android/`.
+- **Antigravity / Gemini MCP**: Native Model Context Protocol server in `scripts/argon_mcp_server.py`.
+- Full details in [`docs/google-ecosystem.md`](file:///c:/Users/scott/argon-engine/docs/google-ecosystem.md).
 
 ## Quality gates
 

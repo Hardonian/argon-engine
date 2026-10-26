@@ -1,0 +1,15 @@
+module(
+    name = "argon_engine",
+    version = "0.1.0",
+    compatibility_level = 1,
+)
+
+# Rules for C/C++ FFI boundary
+bazel_dep(name = "rules_cc", version = "0.0.9")
+
+# Rules for Protocol Buffers and gRPC
+bazel_dep(name = "rules_proto", version = "6.0.0")
+bazel_dep(name = "protobuf", version = "27.1")
+
+# Rules for Python integration
+bazel_dep(name = "rules_python", version = "0.33.2")
