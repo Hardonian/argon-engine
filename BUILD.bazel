@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("@rules_proto//proto:defs.bzl", "proto_library")
 load("@rules_python//python:defs.bzl", "py_library")
 
@@ -9,6 +9,23 @@ cc_library(
     name = "argon_c_header",
     hdrs = ["include/argon.h"],
     includes = ["include"],
+)
+
+# Modern C++20 RAII wrapper complying with Google C++ Style Guide
+cc_library(
+    name = "argon_cpp",
+    hdrs = ["include/argon.hpp"],
+    includes = ["include"],
+    deps = [":argon_c_header"],
+)
+
+# C++20 Smoke Test Binary
+cc_binary(
+    name = "cpp_smoke",
+    srcs = ["examples/cpp_smoke.cpp"],
+    deps = [
+        ":argon_cpp",
+    ],
 )
 
 # Canonical Protocol Buffers schema

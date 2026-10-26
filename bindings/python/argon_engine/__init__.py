@@ -310,3 +310,23 @@ class ArgonEngine:
 
     def __del__(self):
         self.close()
+
+
+# Lazy / safe imports for Google Developer Ecosystem modules
+from argon_engine.jax import ArgonJaxConfig, ArgonJaxTile, forward_forward_step
+from argon_engine.flax import ArgonFlaxLayer
+from argon_engine.keras import ArgonKerasLayer
+from argon_engine.otel import ArgonTelemetryTracer
+
+__all__ = [
+    "ArgonEngine",
+    "ArgonStatus",
+    "TickTelemetry",
+    "ArgonJaxConfig",
+    "ArgonJaxTile",
+    "forward_forward_step",
+    "ArgonFlaxLayer",
+    "ArgonKerasLayer",
+    "ArgonTelemetryTracer",
+]
+

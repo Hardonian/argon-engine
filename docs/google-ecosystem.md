@@ -4,25 +4,50 @@ Argon Engine integrates natively with the Google developer, cloud, research, and
 
 ---
 
-## 1. Google DeepMind & Research: JAX & TPU Integration
+## 1. Google DeepMind & Research: JAX, Flax Linen & TPU Integration
 
-Argon provides a pure functional JAX and OpenXLA tile implementation in [`bindings/python/argon_engine/jax.py`](file:///c:/Users/scott/argon-engine/bindings/python/argon_engine/jax.py) adhering strictly to ADR-0001 semantics and numerical tolerances in `docs/numerics.md`.
+Argon provides pure functional JAX and Flax Linen implementations in [`bindings/python/argon_engine/jax.py`](file:///c:/Users/scott/argon-engine/bindings/python/argon_engine/jax.py) and [`bindings/python/argon_engine/flax.py`](file:///c:/Users/scott/argon-engine/bindings/python/argon_engine/flax.py) adhering strictly to ADR-0001 semantics and numerical tolerances in `docs/numerics.md`.
 
+- **Flax Linen Neural Module**: `ArgonFlaxLayer` integrates into Flax `nn.Module` networks with `@nn.compact` and parameter dictionaries.
 - **JIT Compilation**: Compatible with `jax.jit` for zero-overhead compilation to Google Cloud TPUs (v4/v5e/v5p/v6e Trillium) and GPU accelerators.
 - **Batching & Vectorization**: Native support for `jax.vmap` across sensory streams.
 - **Gradient Composition**: Differentiable forward path while executing local Forward-Forward / Hebbian synaptic updates.
 
 ```python
-import jax
 import jax.numpy as jnp
-from argon_engine.jax import ArgonJaxTile, ArgonJaxConfig
+from argon_engine.flax import ArgonFlaxLayer
 
-config = ArgonJaxConfig(tile_dim=8, learning_rate=0.02, goodness_threshold=1.0)
-tile = ArgonJaxTile(config=config)
-
-sensory = jnp.array([0.5, 0.4, 0.3, 0.2, 0.1, 0.2, 0.3, 0.4], dtype=jnp.float32)
-output, goodness = tile.step(sensory, polarity=1.0)
+layer = ArgonFlaxLayer(features=8, learning_rate=0.02, goodness_threshold=1.0)
+x = jnp.ones((4, 8), dtype=jnp.float32)
+output, goodness = layer(x, training=False)
 ```
+
+---
+
+## 2. Google Core Systems: Modern C++20 RAII Library (`include/argon.hpp`)
+
+Conforming strictly to the **Google C++ Style Guide**, Argon's C++20 library provides:
+- **`std::span` Zero-Copy Views**: Memory safety without raw pointer arithmetic.
+- **Value-or-Status Outcome Semantics**: `argon::Result<T>` and `argon::Status` matching `absl::StatusOr<T>`.
+- **RAII Deterministic Reclamation**: Lifetime managed by `argon::Engine`.
+
+```cpp
+#include <span>
+#include <vector>
+#include "argon.hpp"
+
+auto engine = argon::Engine::Create(2, 8, 0.02f, 1.0f, 0.0005f, 8).Value();
+const std::vector<float> input = {0.5f, 0.4f, 0.3f, 0.2f, 0.1f, 0.2f, 0.3f, 0.4f};
+std::vector<float> output(8, 0.0f);
+auto step_res = engine.Step(1, 1.0f, input, output);
+```
+
+---
+
+## 3. Google Keras 3 Multi-Backend & OpenTelemetry Observability
+
+- **Keras 3 Multi-Backend**: [`bindings/python/argon_engine/keras.py`](file:///c:/Users/scott/argon-engine/bindings/python/argon_engine/keras.py) provides `ArgonKerasLayer`, serializable and runnable on JAX, TensorFlow, or PyTorch backends.
+- **Google Cloud Trace & OpenTelemetry**: [`bindings/python/argon_engine/otel.py`](file:///c:/Users/scott/argon-engine/bindings/python/argon_engine/otel.py) provides `ArgonTelemetryTracer` capturing per-tick nanosecond latency and goodness metrics directly for Cloud Trace.
 
 ---
 

@@ -23,14 +23,18 @@ Low-level, data-efficient persistent SRAM AI execution engine designed for conti
 ## Google Developer Ecosystem
 
 Argon integrates natively with the Google developer and cloud ecosystem:
+- **Google C++20 RAII**: Zero-copy `std::span` and `absl::Status`-style wrapper conforming to Google C++ Style Guide in [`include/argon.hpp`](file:///c:/Users/scott/argon-engine/include/argon.hpp).
 - **JAX / TPU**: Pure functional JAX Forward-Forward module (`argon_engine.jax`) with `jax.jit` and TPU support.
+- **DeepMind Flax Linen**: Native `flax.linen.Module` neural tile (`argon_engine.flax`).
+- **Keras 3 Multi-Backend**: First-class layer (`argon_engine.keras`) for JAX, TensorFlow, and PyTorch backends.
+- **Cloud Trace & OpenTelemetry**: Nanosecond distributed tracing in `argon_engine.otel`.
 - **Protocol Buffers & gRPC**: Bi-directional streaming RPCs in `proto/argon/v1/engine.proto`.
 - **Vertex AI & Cloud Run**: Multi-stage distroless container with `/healthz` and `/predict` handlers in `deploy/`.
 - **Google Colab**: 1-click interactive notebook in `notebooks/argon_quickstart.ipynb`.
 - **Bazel**: Hermetic Bzlmod builds via `MODULE.bazel` and `BUILD.bazel`.
 - **Android NDK**: Cross-compilation for `arm64-v8a` Pixel devices in `bindings/android/`.
 - **Antigravity / Gemini MCP**: Native Model Context Protocol server in `scripts/argon_mcp_server.py`.
-- Full details in [`docs/google-ecosystem.md`](file:///c:/Users/scott/argon-engine/docs/google-ecosystem.md).
+- Comprehensive developer guide in [`docs/google_developer_guide.md`](file:///c:/Users/scott/argon-engine/docs/google_developer_guide.md) and [`docs/google-ecosystem.md`](file:///c:/Users/scott/argon-engine/docs/google-ecosystem.md).
 
 ## Quality gates
 
