@@ -5,6 +5,7 @@
 Low-level, data-efficient persistent SRAM AI execution engine designed for continuous, sample-efficient physical and control paradigms that bypass synchronous PyTorch/CUDA host-dispatch bottlenecks.
 
 ## Workspace Layout
+
 - `crates/argon-kernel`: Bare-metal PTX 8.0 persistent kernel emitter and cache-line-aligned (`#[repr(align(64))]`) ARM64/CPU deterministic SRAM simulator.
 - `crates/argon-runtime`: Lock-free Single-Producer Single-Consumer (`SpscRingBuffer`) memory allocator and multi-layer Forward-Forward / Hebbian coordinator.
 - `crates/argon-medium`: Cache-line-aligned coupled-oscillator plant with allocation-free symplectic integration and sensory-motor coordinator coupling.
@@ -23,6 +24,7 @@ Low-level, data-efficient persistent SRAM AI execution engine designed for conti
 ## Google Developer Ecosystem
 
 Argon integrates natively with the Google developer and cloud ecosystem:
+
 - **Google C++20 RAII**: Zero-copy `std::span` and `absl::Status`-style wrapper conforming to Google C++ Style Guide in [`include/argon.hpp`](file:///c:/Users/scott/argon-engine/include/argon.hpp).
 - **JAX / TPU**: Pure functional JAX Forward-Forward module (`argon_engine.jax`) with `jax.jit` and TPU support.
 - **DeepMind Flax Linen**: Native `flax.linen.Module` neural tile (`argon_engine.flax`).

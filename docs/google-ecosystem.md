@@ -27,6 +27,7 @@ output, goodness = layer(x, training=False)
 ## 2. Google Core Systems: Modern C++20 RAII Library (`include/argon.hpp`)
 
 Conforming strictly to the **Google C++ Style Guide**, Argon's C++20 library provides:
+
 - **`std::span` Zero-Copy Views**: Memory safety without raw pointer arithmetic.
 - **Value-or-Status Outcome Semantics**: `argon::Result<T>` and `argon::Status` matching `absl::StatusOr<T>`.
 - **RAII Deterministic Reclamation**: Lifetime managed by `argon::Engine`.
@@ -79,6 +80,7 @@ Argon features an interactive quickstart notebook in [`notebooks/argon_quickstar
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/hardonian/argon-engine/blob/main/notebooks/argon_quickstart.ipynb)
 
 Includes interactive demonstrations of:
+
 - ADR-0001 golden-vector verification.
 - Contrastive Forward-Forward goodness separation plots.
 - Closed-loop sensory-actuator oscillation damping.
@@ -110,6 +112,7 @@ Argon compiles directly to `libargon_ffi.so` for Android NDK architectures (`arm
 Argon includes a native JSON-RPC 2.0 stdio MCP server in [`scripts/argon_mcp_server.py`](file:///c:/Users/scott/argon-engine/scripts/argon_mcp_server.py).
 
 Enables Gemini and Google Antigravity agents to autonomously:
+
 - Probe local hardware and GPU acceleration backends (`argon_inspect`).
 - Verify cross-backend bit-exact golden vectors (`argon_verify_parity`).
 - Execute inference and plasticity steps (`argon_step`).
