@@ -7,9 +7,9 @@ for researchers developing with Flax Linen and JAX on Google Cloud TPUs/GPUs.
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 try:
-    import jax
-    import jax.numpy as jnp
-    from flax import linen as nn
+    import jax  # type: ignore
+    import jax.numpy as jnp  # type: ignore
+    from flax import linen as nn  # type: ignore
     HAS_FLAX = True
 except ImportError:
     import numpy as jnp

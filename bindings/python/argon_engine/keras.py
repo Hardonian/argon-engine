@@ -7,13 +7,13 @@ compatible across JAX, TensorFlow, and PyTorch backends.
 from typing import Any, Dict, Optional, Tuple
 
 try:
-    import keras
-    from keras import ops
+    import keras  # type: ignore
+    from keras import ops  # type: ignore
     HAS_KERAS = True
 except ImportError:
     try:
-        import tensorflow.keras as keras
-        from tensorflow.keras import backend as ops
+        import tensorflow.keras as keras  # type: ignore
+        from tensorflow.keras import backend as ops  # type: ignore
         HAS_KERAS = True
     except ImportError:
         import numpy as ops

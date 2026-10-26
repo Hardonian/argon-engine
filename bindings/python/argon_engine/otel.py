@@ -101,9 +101,9 @@ def setup_google_cloud_trace_exporter(project_id: Optional[str] = None) -> bool:
         return False
 
     try:
-        from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter  # type: ignore
+        from opentelemetry.sdk.trace import TracerProvider  # type: ignore
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore
 
         provider = TracerProvider()
         trace.set_tracer_provider(provider)

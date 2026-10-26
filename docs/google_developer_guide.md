@@ -8,7 +8,7 @@ This guide details how Google software engineers, research scientists (DeepMind 
 
 Argon Engine provides standard Bazel build targets defined in [`MODULE.bazel`](../MODULE.bazel) and [`BUILD.bazel`](../BUILD.bazel).
 
-### Consuming in your `BUILD` file:
+### Consuming in your `BUILD` file
 
 ```python
 # Modern C++20 RAII targets
@@ -44,11 +44,12 @@ proto_library(
 ## 2. Google-Style C++20 RAII Header (`include/argon.hpp`)
 
 Conforming strictly to the **Google C++ Style Guide**, Argon's C++20 wrapper provides:
+
 - **`std::span` Views**: Zero heap allocation, zero pointer-length arithmetic bugs.
 - **Value-or-Status Semantics**: `argon::Result<T>` and `argon::Status` mimicking `absl::StatusOr<T>`.
 - **Automatic RAII Destruction**: Deterministic coordinator reclamation when scopes exit.
 
-### C++20 Usage Example:
+### C++20 Usage Example
 
 ```cpp
 #include <span>
@@ -159,10 +160,11 @@ with ArgonEngine(num_layers=2, tile_dim=8) as engine:
 ## 6. Vertex AI & Cloud Run Distroless Deployment
 
 Argon includes production-grade container manifests for Google Cloud:
+
 - [`deploy/Dockerfile.vertex`](../deploy/Dockerfile.vertex): Minimal, non-root, distroless image containing pre-compiled zero-copy shared libraries and health check probes.
 - [`deploy/vertex_handler.py`](../deploy/vertex_handler.py): HTTP prediction handler conforming to Vertex AI Custom Container specifications (`/predict` and `/health` endpoints).
 
-### Building and deploying to Google Artifact Registry:
+### Building and deploying to Google Artifact Registry
 
 ```bash
 docker build -t gcr.io/${PROJECT_ID}/argon-vertex:latest -f deploy/Dockerfile.vertex .
@@ -174,7 +176,7 @@ docker push gcr.io/${PROJECT_ID}/argon-vertex:latest
 ## 7. Performance & Latency Envelope
 
 | Component | Target Metric | Measured (Local) |
-|---|---|---|
+| :--- | :--- | :--- |
 | SIMD Closed-Loop Step | `< 1,000,000 ns` (1 ms) | **`1,200 ns`** (~0.0012 ms) |
 | Warmed Allocations | `0 bytes` | **`0 bytes`** (verified via `zero_allocation` test) |
 | C++20 Call Overhead | `< 50 ns` | Zero-copy via `std::span` |

@@ -44,6 +44,8 @@ jobs:
   publish-npm:
     needs: npm-pack
     runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,14 +54,16 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Publish to npm registry
         working-directory: bindings/ts
-        if: ${{ secrets.NPM_TOKEN != '' }}
+        if: env.NPM_TOKEN != ''
         run: npm ci && npm run build && npm publish --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
 
   publish-crates:
     needs: package
     runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -68,9 +72,7 @@ jobs:
       - name: Verify package readiness
         run: cargo check --workspace --all-features
       - name: Publish crates to crates.io
-        if: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        if: env.CARGO_REGISTRY_TOKEN != ''
         run: |
           for crate in argon-kernel argon-runtime argon-medium argon-ffi argon-wasm argon-io argon-backend argon-cli; do
             cargo publish -p $crate
