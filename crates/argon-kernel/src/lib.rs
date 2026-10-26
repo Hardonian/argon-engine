@@ -304,6 +304,7 @@ impl SramTileSimulator {
 
         let dim = self.tile_dim;
         let mut raw_norm_sq = 0.0_f32;
+        let (input_chunks, _) = input_slice.as_chunks::<4>();
 
         for (i, act_slot) in self.sram_activations.iter_mut().enumerate() {
             let row_offset = i.saturating_mul(dim);
@@ -318,11 +319,8 @@ impl SramTileSimulator {
             let mut acc1 = 0.0_f32;
             let mut acc2 = 0.0_f32;
             let mut acc3 = 0.0_f32;
-            for (&[w0, w1, w2, w3], &[x0, x1, x2, x3]) in weight_row
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .zip(input_slice.as_chunks::<4>().0)
+            for (&[w0, w1, w2, w3], &[x0, x1, x2, x3]) in
+                weight_row.as_chunks::<4>().0.iter().zip(input_chunks)
             {
                 acc0 = w0.mul_add(x0, acc0);
                 acc1 = w1.mul_add(x1, acc1);
@@ -359,10 +357,20 @@ impl SramTileSimulator {
             };
 
             let post_synaptic_drive = effective_lr * y_i;
-            for (w_ij, &x_j) in weight_row.iter_mut().zip(input_slice.iter()) {
-                let decay_term = plasticity.weight_decay * (*w_ij);
-                let delta = post_synaptic_drive.mul_add(x_j, -decay_term);
-                *w_ij += delta;
+            for (w_chunk, &[x0, x1, x2, x3]) in weight_row
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(input_chunks)
+            {
+                let d0 = post_synaptic_drive.mul_add(x0, -plasticity.weight_decay * w_chunk[0]);
+                let d1 = post_synaptic_drive.mul_add(x1, -plasticity.weight_decay * w_chunk[1]);
+                let d2 = post_synaptic_drive.mul_add(x2, -plasticity.weight_decay * w_chunk[2]);
+                let d3 = post_synaptic_drive.mul_add(x3, -plasticity.weight_decay * w_chunk[3]);
+                w_chunk[0] += d0;
+                w_chunk[1] += d1;
+                w_chunk[2] += d2;
+                w_chunk[3] += d3;
             }
 
             *out_slot = y_i * inv_rms;
@@ -430,16 +438,34 @@ impl SramTileSimulator {
             ));
         }
 
-        let mut norm_sq = 0.0_f32;
-        for &weight in &self.sram_weights {
-            norm_sq = weight.mul_add(weight, norm_sq);
+        let mut acc0 = 0.0_f32;
+        let mut acc1 = 0.0_f32;
+        let mut acc2 = 0.0_f32;
+        let mut acc3 = 0.0_f32;
+        let (chunks, remainder) = self.sram_weights.as_chunks::<4>();
+        for &[w0, w1, w2, w3] in chunks {
+            acc0 = w0.mul_add(w0, acc0);
+            acc1 = w1.mul_add(w1, acc1);
+            acc2 = w2.mul_add(w2, acc2);
+            acc3 = w3.mul_add(w3, acc3);
+        }
+        let mut norm_sq = (acc0 + acc1) + (acc2 + acc3);
+        for &w in remainder {
+            norm_sq = w.mul_add(w, norm_sq);
         }
         if norm_sq <= f32::EPSILON {
             return Ok(());
         }
 
         let scale = target_norm / norm_sq.sqrt();
-        for weight in &mut self.sram_weights {
+        let (chunks_mut, remainder_mut) = self.sram_weights.as_chunks_mut::<4>();
+        for chunk in chunks_mut {
+            chunk[0] *= scale;
+            chunk[1] *= scale;
+            chunk[2] *= scale;
+            chunk[3] *= scale;
+        }
+        for weight in remainder_mut {
             *weight *= scale;
         }
         Ok(())

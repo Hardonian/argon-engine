@@ -123,6 +123,17 @@ impl<W: Write> TelemetryLogWriter<W> {
         Ok(())
     }
 
+    /// Appends multiple [`TraceRecord`]s to the persistent stream in a tight loop.
+    ///
+    /// # Errors
+    /// Returns [`IoError`] if serialization or writing fails.
+    pub fn write_records(&mut self, records: &[TraceRecord]) -> Result<(), IoError> {
+        for record in records {
+            self.write_record(record)?;
+        }
+        Ok(())
+    }
+
     /// Number of records written in this stream.
     pub const fn records_written(&self) -> u64 {
         self.records_written
@@ -206,6 +217,26 @@ impl<R: Read> TelemetryLogReader<R> {
     /// Number of records read so far.
     pub const fn records_read(&self) -> u64 {
         self.records_read
+    }
+
+    /// Reads up to `destination.len()` records into caller-allocated storage.
+    ///
+    /// Returns the number of records read.
+    ///
+    /// # Errors
+    /// Returns [`IoError`] on corrupted log format or I/O failure.
+    pub fn read_batch(&mut self, destination: &mut [TraceRecord]) -> Result<usize, IoError> {
+        let mut count = 0;
+        for slot in destination.iter_mut() {
+            match self.read_record()? {
+                Some(record) => {
+                    *slot = record;
+                    count += 1;
+                }
+                None => break,
+            }
+        }
+        Ok(count)
     }
 
     /// Consumes the reader and returns the underlying stream.
@@ -466,6 +497,48 @@ mod tests {
         let mut reader = TelemetryLogReader::new(Cursor::new(sink))?;
         let res = reader.read_record();
         assert!(matches!(res, Err(IoError::CorruptedLog(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn telemetry_batch_write_and_read() -> Result<(), Box<dyn std::error::Error>> {
+        let mut sink = Vec::new();
+        let mut writer = TelemetryLogWriter::new(&mut sink)?;
+
+        let batch = [
+            TraceRecord {
+                sequence_id: 10,
+                mean_goodness: 0.1,
+                output_l2_norm: 1.0,
+                queue_depth: 0,
+                flags: 0,
+            },
+            TraceRecord {
+                sequence_id: 11,
+                mean_goodness: 0.2,
+                output_l2_norm: 1.1,
+                queue_depth: 0,
+                flags: 0,
+            },
+        ];
+
+        writer.write_records(&batch)?;
+        writer.flush()?;
+        assert_eq!(writer.records_written(), 2);
+
+        let mut reader = TelemetryLogReader::new(Cursor::new(sink))?;
+        let mut dest = [TraceRecord {
+            sequence_id: 0,
+            mean_goodness: 0.0,
+            output_l2_norm: 0.0,
+            queue_depth: 0,
+            flags: 0,
+        }; 4];
+
+        let read_count = reader.read_batch(&mut dest)?;
+        assert_eq!(read_count, 2);
+        assert_eq!(dest[0], batch[0]);
+        assert_eq!(dest[1], batch[1]);
         Ok(())
     }
 }
