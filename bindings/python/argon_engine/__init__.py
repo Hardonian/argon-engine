@@ -139,6 +139,15 @@ def _get_lib():
         ctypes.c_size_t,
     ]
 
+    lib.argon_engine_attestation_hash.restype = ctypes.c_int
+    lib.argon_engine_attestation_hash.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint64),
+    ]
+
+    lib.argon_engine_verify_integrity.restype = ctypes.c_int
+    lib.argon_engine_verify_integrity.argtypes = [ctypes.c_void_p]
+
     lib.argon_engine_destroy.restype = ctypes.c_int
     lib.argon_engine_destroy.argtypes = [ctypes.c_void_p]
 

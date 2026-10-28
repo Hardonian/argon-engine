@@ -722,6 +722,11 @@ impl ArgonCoordinator {
         self.apply_homeostasis(target_norm)
     }
 
+    /// Returns the total number of execution ticks completed by the coordinator.
+    pub const fn total_ticks(&self) -> u64 {
+        self.total_ticks
+    }
+
     /// Applies an independent homeostatic target norm to each layer.
     ///
     /// # Errors
