@@ -820,7 +820,8 @@ mod tests {
     #[test]
     fn lyapunov_certifier_validates_decaying_energy_trajectory() -> Result<(), MediumError> {
         let decaying_trajectory = [10.0_f32, 8.0, 6.4, 5.12, 4.096, 3.2768];
-        let cert = LyapunovStabilityCertifier::certify_energy_trajectory(&decaying_trajectory, 0.01)?;
+        let cert =
+            LyapunovStabilityCertifier::certify_energy_trajectory(&decaying_trajectory, 0.01)?;
         assert!(cert.max_lyapunov_exponent < 0.0);
         assert!(cert.is_provably_stable);
         assert_eq!(cert.peak_energy, 10.0);

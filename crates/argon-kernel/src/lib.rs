@@ -531,7 +531,9 @@ impl QuantizedSramTileSimulator {
         output_slice: &mut [f32],
         plasticity: &PlasticityConfig,
     ) -> Result<f32, KernelError> {
-        let goodness = self.inner.step_in_sram(input_slice, output_slice, plasticity)?;
+        let goodness = self
+            .inner
+            .step_in_sram(input_slice, output_slice, plasticity)?;
         for out in output_slice.iter_mut() {
             *out = Self::quantize_scalar(*out, self.format);
         }
@@ -611,8 +613,10 @@ impl LifSpikeEncoder {
         }
 
         let mut spike_count = 0;
-        for (i, (&input_current, spike_slot)) in
-            current_input.iter().zip(spikes_output.iter_mut()).enumerate()
+        for (i, (&input_current, spike_slot)) in current_input
+            .iter()
+            .zip(spikes_output.iter_mut())
+            .enumerate()
         {
             let v = self.membrane_potentials[i] * self.leak_factor + input_current;
             if v >= self.threshold {

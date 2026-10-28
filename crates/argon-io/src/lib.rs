@@ -505,8 +505,8 @@ impl MerkleTelemetryAudit {
             let mut next_level = Vec::with_capacity((current_level.len() + 1) / 2);
             for chunk in current_level.chunks(2) {
                 if chunk.len() == 2 {
-                    let combined = chunk[0].rotate_left(13)
-                        ^ chunk[1].wrapping_mul(0x9e37_79b9_7f4a_7c15);
+                    let combined =
+                        chunk[0].rotate_left(13) ^ chunk[1].wrapping_mul(0x9e37_79b9_7f4a_7c15);
                     next_level.push(combined);
                 } else {
                     next_level.push(chunk[0].rotate_left(7));
