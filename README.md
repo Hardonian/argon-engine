@@ -38,6 +38,19 @@ Argon integrates natively with the Google developer and cloud ecosystem:
 - **Antigravity / Gemini MCP**: Native Model Context Protocol server in `scripts/argon_mcp_server.py`.
 - Comprehensive developer guide in [`docs/google_developer_guide.md`](file:///c:/Users/scott/argon-engine/docs/google_developer_guide.md) and [`docs/google-ecosystem.md`](file:///c:/Users/scott/argon-engine/docs/google-ecosystem.md).
 
+## Architectural Pillars & Delivery Roadmap
+
+Argon is structured around six core engineering pillars and eight delivery phases (P0–P7) detailed in [`docs/roadmap.md`](file:///c:/Users/scott/argon-engine/docs/roadmap.md):
+
+- **Pillar 1: Persistent In-SRAM Execution**: Resident SM execution blocks, zero kernel-launch dispatch overhead, and cache-line-aligned CPU emulation.
+- **Pillar 2: Symplectic Dynamical Medium**: Allocation-free closed-loop control, Hamiltonian volume preservation, and bounded energy drift ($\Delta E / E < 10^{-4}$).
+- **Pillar 3: Heterogeneous Golden Parity**: Bit-exact mathematical reproducibility across CPU, WASM SIMD, Apple Metal, Vulkan, AMD ROCm, and Triton GPU.
+- **Pillar 4: Google Cloud & Research Ecosystem**: DeepMind JAX/Flax on TPU, C++20 RAII (`std::span`), Keras 3, Cloud Trace OTel, gRPC, Vertex AI, Bazel, and Android NDK.
+- **Pillar 5: Sovereign Local-First AI**: Loopback-isolated LLM discovery, streaming completions, and zero cloud credential reliance for physical control.
+- **Pillar 6: Continuous Synaptic Homeostasis**: Local Forward-Forward contrastive learning ($+1.0$ positive / $-1.0$ negative phase) and dynamic weight normalization.
+
+See the complete [Delivery Roadmap & Milestones (P0–P7)](file:///c:/Users/scott/argon-engine/docs/roadmap.md) for full phase breakdown, qualification criteria, and production deliverables.
+
 ## Quality gates
 
 ```text

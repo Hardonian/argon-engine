@@ -19,7 +19,11 @@ pass on the tagged commit:
 - [x] Numerical contract and energy conservation verified.
 - [x] Golden-vector parity confirmed across CPU, Vulkan, Metal, ROCm, WASM, and Python NumPy.
 - [x] C FFI smoke test (`examples/c_ffi_smoke.c`) passes.
+- [x] Google C++20 RAII smoke test (`examples/cpp_smoke.cpp`) passes.
 - [x] Python test suite (`bindings/python/tests/test_engine.py`) passes.
+- [x] Google DeepMind JAX & Flax Linen test suite (`bindings/python/tests/test_jax.py`) passes.
+- [x] Google Cloud Ecosystem test suite (Keras 3, Cloud Trace OTel in `test_google_ecosystem.py`) passes.
+- [x] Protocol Buffers & gRPC streaming test suite (`test_grpc_service.py`) passes.
 - [x] TypeScript test suite (`bindings/ts`) passes.
 - [x] Heterogeneous parity CLI command (`argon-cli verify-parity`) passing bit-exact.
 
