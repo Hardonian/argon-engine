@@ -1,10 +1,10 @@
-﻿# Argon Engine: Master Delivery Roadmap & Architectural Blueprint
+# Argon Engine: Master Delivery Roadmap & Architectural Blueprint
 
 This document specifies the foundational **Architectural Pillars**, **Delivery Phases (P0â€“P7)**, **Engineering Milestones (M0.1â€“M7.4)**, and **Actionable TODOs** governing the development, qualification, and production deployment of **Argon Engine**.
 
 ---
 
-## ðŸ›ï¸ Foundational Architectural Pillars
+## 🏛️ Foundational Architectural Pillars
 
 Argon Engine is built on six foundational engineering pillars designed to bypass synchronous host-device transfer bottlenecks, ensure absolute mathematical determinism, and provide continuous, sample-efficient physical control.
 
