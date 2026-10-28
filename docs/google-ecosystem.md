@@ -117,3 +117,17 @@ Enables Gemini and Google Antigravity agents to autonomously:
 - Verify cross-backend bit-exact golden vectors (`argon_verify_parity`).
 - Execute inference and plasticity steps (`argon_step`).
 - Query weight checksums and rescale homeostatic norms (`argon_weight_checksum`, `argon_scale_weights`).
+
+---
+
+## 8. Google Workspace & GSuite: Synchronous Telemetry, Sheets & Drive
+
+Argon provides synchronous, high-interoperability Google Workspace utilities in [`bindings/python/argon_engine/workspace.py`](file:///c:/Users/scott/argon-engine/bindings/python/argon_engine/workspace.py) and CLI tooling:
+
+- **Google Sheets Synchronous Streaming**: `GoogleSheetsTelemetrySync` buffers runtime ticks and outputs Google Sheets API `ValueRange` payloads or CSV files with precomputed `=AVERAGE`, `=STDEV`, and `=MAX` formula rows for instant dashboarding.
+- **Google Docs Technical Report Generator**: `GoogleDocsReportGenerator` compiles session metrics, checksum verifications, and golden-vector statuses into a structured Markdown/HTML document ready for Google Docs import.
+- **Google Drive Checkpoint Archiver**: `GoogleDriveModelArchive` bundles model weights (`.npy`), metadata JSON, and telemetry logs into a verified directory structure ready for Google Drive backup.
+- **CLI Export Command**:
+  ```bash
+  cargo run -p argon-cli -- export-sheets telemetry.argonlog --record live_telemetry.csv
+  ```
