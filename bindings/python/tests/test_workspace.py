@@ -132,3 +132,4 @@ def test_argon_engine_end_to_end_workspace_export():
             GoogleDocsReportGenerator.export_report(report_path, report_text)
             assert report_path.exists()
             assert "Argon Engine Execution & Experiment Report" in report_path.read_text(encoding="utf-8")
+
