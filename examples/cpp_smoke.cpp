@@ -1,8 +1,19 @@
 #include <cassert>
+#include <cstdint>
 #include <iostream>
 #include <vector>
 
-#include "argon.hpp"
+#if defined(__has_include)
+#  if __has_include("../include/argon.hpp")
+#    include "../include/argon.hpp"
+#  elif __has_include("argon.hpp")
+#    include "argon.hpp"
+#  else
+#    include <argon.hpp>
+#  endif
+#else
+#  include "../include/argon.hpp"
+#endif
 
 int main() {
   // Initialize a 2-layer, 8-dimensional Argon engine with RAII ownership

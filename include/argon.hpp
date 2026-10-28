@@ -6,14 +6,83 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <span>
-#include <string>
+#include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "argon.h"
+#if defined(__has_include)
+#  if __has_include(<span>) && (defined(__cpp_lib_span) || __cplusplus >= 202002L)
+#    include <span>
+#  endif
+#  if __has_include("argon.h")
+#    include "argon.h"
+#  elif __has_include("../include/argon.h")
+#    include "../include/argon.h"
+#  else
+#    include <argon.h>
+#  endif
+#else
+#  include "argon.h"
+#endif
 
 namespace argon {
+
+#if defined(__cpp_lib_span) || (defined(__cplusplus) && __cplusplus >= 202002L && __has_include(<span>))
+template <typename T, size_t Extent = std::dynamic_extent>
+using span = std::span<T, Extent>;
+#else
+inline constexpr size_t dynamic_extent = static_cast<size_t>(-1);
+
+template <typename T, size_t Extent = dynamic_extent>
+class span {
+ public:
+  using element_type = T;
+  using value_type = std::remove_cv_t<T>;
+  using size_type = size_t;
+  using pointer = T*;
+  using const_pointer = const T*;
+  using reference = T&;
+  using const_reference = const T&;
+  using iterator = T*;
+  using const_iterator = const T*;
+
+  constexpr span() noexcept : data_(nullptr), size_(0) {}
+  constexpr span(pointer ptr, size_type count) noexcept : data_(ptr), size_(count) {}
+  constexpr span(pointer first, pointer last) noexcept : data_(first), size_(static_cast<size_type>(last - first)) {}
+
+  template <size_t N>
+  constexpr span(element_type (&arr)[N]) noexcept : data_(arr), size_(N) {}
+
+  template <typename Container,
+            typename = std::enable_if_t<!std::is_same_v<std::decay_t<Container>, span> &&
+                                        std::is_convertible_v<decltype(std::declval<Container>().data()), pointer>>>
+  constexpr span(Container& cont) noexcept : data_(cont.data()), size_(cont.size()) {}
+
+  template <typename Container,
+            typename = std::enable_if_t<!std::is_same_v<std::decay_t<Container>, span> &&
+                                        std::is_convertible_v<decltype(std::declval<const Container>().data()), pointer>>>
+  constexpr span(const Container& cont) noexcept : data_(cont.data()), size_(cont.size()) {}
+
+  constexpr pointer data() const noexcept { return data_; }
+  constexpr size_type size() const noexcept { return size_; }
+  constexpr size_type size_bytes() const noexcept { return size_ * sizeof(element_type); }
+  [[nodiscard]] constexpr bool empty() const noexcept { return size_ == 0; }
+
+  constexpr reference operator[](size_type idx) const noexcept { return data_[idx]; }
+  constexpr reference front() const noexcept { return data_[0]; }
+  constexpr reference back() const noexcept { return data_[size_ - 1]; }
+
+  constexpr iterator begin() const noexcept { return data_; }
+  constexpr iterator end() const noexcept { return data_ + size_; }
+  constexpr const_iterator cbegin() const noexcept { return data_; }
+  constexpr const_iterator cend() const noexcept { return data_ + size_; }
+
+ private:
+  pointer data_;
+  size_type size_;
+};
+#endif
 
 /// Status wrapper representing C-ABI operational outcomes.
 class Status {
@@ -127,8 +196,8 @@ class Engine {
 
   /// Executes one synchronous zero-copy forward and plasticity step.
   Result<ArgonTickTelemetry> Step(uint64_t sequence_id, float phase_polarity,
-                                 std::span<const float> input,
-                                 std::span<float> output) {
+                                 span<const float> input,
+                                 span<float> output) {
     if (!handle_) return Result<ArgonTickTelemetry>(ARGON_STATUS_NULL_POINTER);
     if (input.size() != tile_dim_ || output.size() != tile_dim_) {
       return Result<ArgonTickTelemetry>(ARGON_STATUS_DIMENSION_MISMATCH);
@@ -182,7 +251,7 @@ class Engine {
   }
 
   /// Restores synaptic weights from caller-provided memory.
-  Result<void> RestoreWeights(std::span<const float> weights) {
+  Result<void> RestoreWeights(span<const float> weights) {
     if (!handle_) return Result<void>(ARGON_STATUS_NULL_POINTER);
     ArgonStatus status =
         argon_engine_restore_weights(handle_, weights.data(), weights.size());
