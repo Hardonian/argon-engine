@@ -70,3 +70,19 @@ def test_dimension_mismatch_raises():
         bad_input = np.ones(4, dtype=np.float32)
         with pytest.raises(ValueError, match="shape mismatch"):
             engine.step(bad_input)
+
+
+def test_attestation_hash_and_integrity_verification():
+    with ArgonEngine(num_layers=2, tile_dim=8) as engine:
+        att_hash = engine.attestation_hash()
+        assert att_hash != 0
+        assert isinstance(att_hash, int)
+
+        assert engine.verify_integrity() is True
+
+        # After step, attestation updates deterministically
+        sensory = np.ones(8, dtype=np.float32) * 0.5
+        engine.step(sensory)
+        stepped_att_hash = engine.attestation_hash()
+        assert stepped_att_hash != att_hash
+        assert engine.verify_integrity() is True

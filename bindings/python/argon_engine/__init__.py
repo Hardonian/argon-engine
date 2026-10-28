@@ -305,6 +305,24 @@ class ArgonEngine:
             msg = self.lib.argon_status_message(status).decode("utf-8")
             raise RuntimeError(f"argon_engine_restore_weights failed: {msg} (code={status})")
 
+    def attestation_hash(self) -> int:
+        """Returns the 64-bit cryptographic attestation hash of the active engine state."""
+        if self._handle.value is None:
+            raise RuntimeError("ArgonEngine instance has been closed")
+        out_hash = ctypes.c_uint64(0)
+        status = self.lib.argon_engine_attestation_hash(self._handle, ctypes.byref(out_hash))
+        if status != ArgonStatus.OK:
+            msg = self.lib.argon_status_message(status).decode("utf-8")
+            raise RuntimeError(f"argon_engine_attestation_hash failed: {msg} (code={status})")
+        return int(out_hash.value)
+
+    def verify_integrity(self) -> bool:
+        """Verifies that internal weights, dimensions, and memory invariants are sound."""
+        if self._handle.value is None:
+            raise RuntimeError("ArgonEngine instance has been closed")
+        status = self.lib.argon_engine_verify_integrity(self._handle)
+        return status == ArgonStatus.OK
+
     def close(self) -> None:
         """Releases the underlying native coordinator."""
         if getattr(self, "_handle", None) is not None and self._handle.value is not None:

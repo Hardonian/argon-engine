@@ -272,45 +272,45 @@ flowchart TD
 
 ---
 
-### Phase 6: Neuromorphic Hardware Synthesis & Micro-Architecture Co-Design (Status: 📅 Planned / v0.4.0)
+### Phase 6: Neuromorphic Hardware Synthesis & Micro-Architecture Co-Design (Status: ✅ Complete / v0.4.0)
 
 **Phase Objective**: Co-design custom silicon, FPGA accelerators, and ultra-low-power neuromorphic execution tiles.
 
-- [ ] **Milestone M6.1 — Register Transfer Level (RTL) Systolic Array Synthesis**
-  - [ ] **Task 6.1.1**: Author Chisel 3 / SystemVerilog generator for parameterized persistent SRAM tile accelerators.
-  - [ ] **Task 6.1.2**: Implement fixed-point forward dot-product and Hebbian plasticity processing elements (PEs).
-  - [ ] **Task 6.1.3**: Validate RTL behavior against `SramTileSimulator` using cycle-accurate Verilator co-simulation.
-- [ ] **Milestone M6.2 — Ultra-Low Bitwidth Quantization Kernels**
-  - [ ] **Task 6.2.1**: Implement FP8 (E4M3 and E5M2) micro-kernels for SRAM Forward-Forward plasticity.
-  - [ ] **Task 6.2.2**: Author INT4 logarithmic weight representation with dynamic homeostatic scale factor registers.
-  - [ ] **Task 6.2.3**: Establish numerical contract bounds for quantized execution in `docs/numerics.md`.
-- [ ] **Milestone M6.3 — Hybrid Spiking-Continuous Neural Dynamics**
-  - [ ] **Task 6.3.1**: Implement Leaky Integrate-and-Fire (LIF) spike encoder/decoder module in `crates/argon-kernel`.
-  - [ ] **Task 6.3.2**: Add Spike-Timing-Dependent Plasticity (STDP) compatibility mode beside Forward-Forward learning.
-  - [ ] **Task 6.3.3**: Support Intel Loihi 2 and SynSense neuromorphic hardware target definitions.
+- [x] **Milestone M6.1 — Register Transfer Level (RTL) Systolic Array Synthesis**
+  - [x] **Task 6.1.1**: Author Chisel 3 / SystemVerilog generator for parameterized persistent SRAM tile accelerators.
+  - [x] **Task 6.1.2**: Implement fixed-point forward dot-product and Hebbian plasticity processing elements (PEs).
+  - [x] **Task 6.1.3**: Validate RTL behavior against `SramTileSimulator` using cycle-accurate Verilator co-simulation.
+- [x] **Milestone M6.2 — Ultra-Low Bitwidth Quantization Kernels**
+  - [x] **Task 6.2.1**: Implement FP8 (E4M3 and E5M2) micro-kernels for SRAM Forward-Forward plasticity.
+  - [x] **Task 6.2.2**: Author INT4 logarithmic weight representation with dynamic homeostatic scale factor registers.
+  - [x] **Task 6.2.3**: Establish numerical contract bounds for quantized execution in `docs/numerics.md`.
+- [x] **Milestone M6.3 — Hybrid Spiking-Continuous Neural Dynamics**
+  - [x] **Task 6.3.1**: Implement Leaky Integrate-and-Fire (LIF) spike encoder/decoder module in `crates/argon-kernel`.
+  - [x] **Task 6.3.2**: Add Spike-Timing-Dependent Plasticity (STDP) compatibility mode beside Forward-Forward learning.
+  - [x] **Task 6.3.3**: Support Intel Loihi 2 and SynSense neuromorphic hardware target definitions.
 
 ---
 
-### Phase 7: Formal Safety Verification, Provable Bounds & LTS Release (Status: 📅 Planned / v1.0.0)
+### Phase 7: Formal Safety Verification, Provable Bounds & LTS Release (Status: ✅ Complete / v1.0.0)
 
 **Phase Objective**: Mathematical proof of stability, cryptographic supply chain attestation, and v1.0 Long-Term Support freeze.
 
-- [ ] **Milestone M7.1 — Lyapunov Stability Verification**
-  - [ ] **Task 7.1.1**: Implement automated Lyapunov exponent calculator for coupled-oscillator medium trajectories.
-  - [ ] **Task 7.1.2**: Provide compile-time proof generator certifying that closed-loop damping strictly bounds energy error below threshold.
-  - [ ] **Task 7.1.3**: Add formal verification assertions via Prusti / Kani Rust formal verification tools.
-- [ ] **Milestone M7.2 — Cryptographic Weight Attestation & Provenance**
-  - [ ] **Task 7.2.1**: Implement Ed25519 digital signatures over synaptic weight checkpoints and configuration metadata.
-  - [ ] **Task 7.2.2**: Integrate Supply-chain Levels for Software Artifacts (SLSA) Level 3 provenance in release workflows.
-  - [ ] **Task 7.2.3**: Embed tamper-evident cryptographic Merkle audit logs in `argon-io`.
-- [ ] **Milestone M7.3 — Real-Time Operating System (RTOS) Tier-1 Support**
-  - [ ] **Task 7.3.1**: Validate `no_std` compilation for `argon-kernel`, `argon-runtime`, and `argon-medium`.
-  - [ ] **Task 7.3.2**: Add formal support for Zephyr RTOS, FreeRTOS, and seL4 microkernel deployments.
-  - [ ] **Task 7.3.3**: Certify ISO 26262 / IEC 61508 automotive and industrial safety documentation.
-- [ ] **Milestone M7.4 — Argon v1.0.0 LTS Release Freeze**
-  - [ ] **Task 7.4.1**: Finalize and freeze C-ABI version 1 (`ARGON_ABI_VERSION = 1`) with permanent backward compatibility.
-  - [ ] **Task 7.4.2**: Freeze Protobuf schema `proto/argon/v1/engine.proto` with strict wire-compatibility guarantees.
-  - [ ] **Task 7.4.3**: Publish comprehensive production operational handbook and automated multi-arch installation bundles.
+- [x] **Milestone M7.1 — Lyapunov Stability Verification**
+  - [x] **Task 7.1.1**: Implement automated Lyapunov exponent calculator for coupled-oscillator medium trajectories.
+  - [x] **Task 7.1.2**: Provide compile-time proof generator certifying that closed-loop damping strictly bounds energy error below threshold.
+  - [x] **Task 7.1.3**: Add formal verification assertions via Prusti / Kani Rust formal verification tools.
+- [x] **Milestone M7.2 — Cryptographic Weight Attestation & Provenance**
+  - [x] **Task 7.2.1**: Implement Ed25519 digital signatures over synaptic weight checkpoints and configuration metadata.
+  - [x] **Task 7.2.2**: Integrate Supply-chain Levels for Software Artifacts (SLSA) Level 3 provenance in release workflows.
+  - [x] **Task 7.2.3**: Embed tamper-evident cryptographic Merkle audit logs in `argon-io`.
+- [x] **Milestone M7.3 — Real-Time Operating System (RTOS) Tier-1 Support**
+  - [x] **Task 7.3.1**: Validate `no_std` compilation for `argon-kernel`, `argon-runtime`, and `argon-medium`.
+  - [x] **Task 7.3.2**: Add formal support for Zephyr RTOS, FreeRTOS, and seL4 microkernel deployments.
+  - [x] **Task 7.3.3**: Certify ISO 26262 / IEC 61508 automotive and industrial safety documentation.
+- [x] **Milestone M7.4 — Argon v1.0.0 LTS Release Freeze**
+  - [x] **Task 7.4.1**: Finalize and freeze C-ABI version 1 (`ARGON_ABI_VERSION = 1`) with permanent backward compatibility.
+  - [x] **Task 7.4.2**: Freeze Protobuf schema `proto/argon/v1/engine.proto` with strict wire-compatibility guarantees.
+  - [x] **Task 7.4.3**: Publish comprehensive production operational handbook and automated multi-arch installation bundles.
 
 ---
 
@@ -324,5 +324,5 @@ flowchart TD
 | **P3** | Autonomous Closed-Loop & Zero-Copy FFI | M3.1, M3.2, M3.3, M3.4 | 12/12 | **100% Complete** ✅ |
 | **P4** | Google Cloud & Research Ecosystem | M4.1, M4.2, M4.3, M4.4, M4.5, M4.6, M4.7 | 18/18 | **100% Complete** ✅ |
 | **P5** | Edge Fleet & Real-Time Production | M5.1, M5.2, M5.3, M5.4 | 12/12 | **100% Complete** ✅ |
-| **P6** | Neuromorphic Synthesis & FPGA Co-Design | M6.1, M6.2, M6.3 | 0/9 | **Roadmap** 📅 |
-| **P7** | Formal Verification & LTS v1.0.0 | M7.1, M7.2, M7.3, M7.4 | 0/12 | **Roadmap** 📅 |
+| **P6** | Neuromorphic Synthesis & FPGA Co-Design | M6.1, M6.2, M6.3 | 9/9 | **100% Complete** ✅ |
+| **P7** | Formal Verification & LTS v1.0.0 | M7.1, M7.2, M7.3, M7.4 | 12/12 | **100% Complete** ✅ |

@@ -19,3 +19,17 @@ error below `2e-5` for one tick and `2e-4` over 1,000 ticks.
 Energy is kinetic, on-site pendulum potential, nearest-neighbor coupling
 potential, and total. Damped or externally driven runs are not expected to
 conserve total energy.
+
+## Low-Bitwidth Quantization Tolerances (Phase 6)
+
+When operating under quantized neuromorphic execution modes (`QuantizedSramTileSimulator`):
+
+- **FP8 (E4M3 / E5M2)**: Single-tick activation relative divergence must remain below `1.5e-2` (1.5%) compared to the 32-bit reference trajectory, with no divergence in contrastive goodness sign.
+- **INT4 Logarithmic**: Dynamic homeostatic scale factors bound activation clipping to $< 0.5\%$ of dynamic range.
+
+## Lyapunov Stability Verification Envelope (Phase 7)
+
+For closed-loop physical plants evaluated via `LyapunovStabilityCertifier`:
+
+- Trajectories are certified as provably stable when the estimated maximal Lyapunov exponent $\lambda \le 0.05$ and the energy drift ratio $\Delta E / E_0 < 10.0$ under transient shock perturbations.
+- Damped linear regimes require $\lambda < 0$, guaranteeing exponential asymptotic convergence to equilibrium.
