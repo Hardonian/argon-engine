@@ -618,7 +618,7 @@ impl LifSpikeEncoder {
             .zip(spikes_output.iter_mut())
             .enumerate()
         {
-            let v = self.membrane_potentials[i] * self.leak_factor + input_current;
+            let v = self.membrane_potentials[i].mul_add(self.leak_factor, input_current);
             if v >= self.threshold {
                 *spike_slot = 1.0;
                 self.membrane_potentials[i] = self.rest_potential;
@@ -741,6 +741,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn lif_spike_encoder_threshold_and_leaks() -> Result<(), KernelError> {
         let mut lif = LifSpikeEncoder::new(2, 1.0, 0.5)?;
         let mut spikes = [0.0_f32; 2];

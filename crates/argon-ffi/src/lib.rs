@@ -295,7 +295,7 @@ pub unsafe extern "C" fn argon_engine_attestation_hash(
         let total_ticks = engine.coordinator.total_ticks();
         let prime = 0x0100_0000_01b3_u64;
         let mut attestation = 0xcbf2_9ce4_8422_2325_u64;
-        attestation = (attestation ^ (ARGON_ABI_VERSION as u64)).wrapping_mul(prime);
+        attestation = (attestation ^ u64::from(ARGON_ABI_VERSION)).wrapping_mul(prime);
         attestation = (attestation ^ (engine.tile_dim as u64)).wrapping_mul(prime);
         attestation = (attestation ^ checksum).wrapping_mul(prime);
         attestation = (attestation ^ total_ticks).wrapping_mul(prime);
