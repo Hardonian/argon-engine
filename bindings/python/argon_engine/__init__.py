@@ -317,6 +317,11 @@ from argon_engine.jax import ArgonJaxConfig, ArgonJaxTile, forward_forward_step
 from argon_engine.flax import ArgonFlaxLayer
 from argon_engine.keras import ArgonKerasLayer
 from argon_engine.otel import ArgonTelemetryTracer
+from argon_engine.workspace import (
+    GoogleSheetsTelemetrySync,
+    GoogleDocsReportGenerator,
+    GoogleDriveModelArchive,
+)
 
 __all__ = [
     "ArgonEngine",
@@ -328,5 +333,8 @@ __all__ = [
     "ArgonFlaxLayer",
     "ArgonKerasLayer",
     "ArgonTelemetryTracer",
+    "GoogleSheetsTelemetrySync",
+    "GoogleDocsReportGenerator",
+    "GoogleDriveModelArchive",
 ]
 
