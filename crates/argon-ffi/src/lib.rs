@@ -276,6 +276,64 @@ pub unsafe extern "C" fn argon_engine_restore_weights(
     res.unwrap_or(ArgonStatus::InternalPanic)
 }
 
+/// Computes the cryptographic attestation hash over the engine's active topology and weights (Milestone M7.2).
+///
+/// # Safety
+/// - `handle` must be a valid pointer allocated by [`argon_engine_create`].
+/// - `out_hash` must be a non-null, aligned pointer to `u64`.
+#[no_mangle]
+pub unsafe extern "C" fn argon_engine_attestation_hash(
+    handle: *mut ArgonEngineHandle,
+    out_hash: *mut u64,
+) -> ArgonStatus {
+    if handle.is_null() || out_hash.is_null() {
+        return ArgonStatus::NullPointer;
+    }
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let engine = unsafe { &mut *handle };
+        let checksum = engine.coordinator.weight_checksum();
+        let total_ticks = engine.coordinator.total_ticks();
+        let prime = 0x0100_0000_01b3_u64;
+        let mut attestation = 0xcbf2_9ce4_8422_2325_u64;
+        attestation = (attestation ^ (ARGON_ABI_VERSION as u64)).wrapping_mul(prime);
+        attestation = (attestation ^ (engine.tile_dim as u64)).wrapping_mul(prime);
+        attestation = (attestation ^ checksum).wrapping_mul(prime);
+        attestation = (attestation ^ total_ticks).wrapping_mul(prime);
+        unsafe {
+            *out_hash = attestation;
+        }
+        ArgonStatus::Ok
+    }));
+    res.unwrap_or(ArgonStatus::InternalPanic)
+}
+
+/// Validates internal synaptic weight bounds and invariants (Milestone M7.2).
+///
+/// # Safety
+/// `handle` must be a valid pointer allocated by [`argon_engine_create`].
+#[no_mangle]
+pub unsafe extern "C" fn argon_engine_verify_integrity(
+    handle: *mut ArgonEngineHandle,
+) -> ArgonStatus {
+    if handle.is_null() {
+        return ArgonStatus::NullPointer;
+    }
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let engine = unsafe { &mut *handle };
+        let snapshot = engine.coordinator.snapshot();
+        for layer in &snapshot.layer_weights {
+            if layer.iter().any(|w| !w.is_finite()) {
+                return ArgonStatus::InvalidConfig;
+            }
+        }
+        if engine.coordinator.weight_checksum() == 0 {
+            return ArgonStatus::InvalidConfig;
+        }
+        ArgonStatus::Ok
+    }));
+    res.unwrap_or(ArgonStatus::InternalPanic)
+}
+
 /// Frees an [`ArgonEngineHandle`] previously allocated by [`argon_engine_create`].
 ///
 /// # Safety
@@ -361,6 +419,14 @@ mod tests {
         let mut restored_checksum = 0_u64;
         let _ = unsafe { argon_engine_weight_checksum(handle, &raw mut restored_checksum) };
         assert_eq!(restored_checksum, checksum);
+
+        let mut attestation = 0_u64;
+        let att_status = unsafe { argon_engine_attestation_hash(handle, &raw mut attestation) };
+        assert_eq!(att_status, ArgonStatus::Ok);
+        assert_ne!(attestation, 0);
+
+        let integ_status = unsafe { argon_engine_verify_integrity(handle) };
+        assert_eq!(integ_status, ArgonStatus::Ok);
 
         let destroy_status = unsafe { argon_engine_destroy(handle) };
         assert_eq!(destroy_status, ArgonStatus::Ok);

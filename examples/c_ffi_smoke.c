@@ -28,5 +28,11 @@ int main(void) {
   if (argon_engine_weight_checksum(engine, &restored_checksum) != ARGON_STATUS_OK) return 11;
   if (restored_checksum != initial_checksum) return 12;
 
-  return argon_engine_destroy(engine) == ARGON_STATUS_OK ? 0 : 13;
+  uint64_t attestation = 0;
+  if (argon_engine_attestation_hash(engine, &attestation) != ARGON_STATUS_OK) return 13;
+  if (attestation == 0) return 14;
+
+  if (argon_engine_verify_integrity(engine) != ARGON_STATUS_OK) return 15;
+
+  return argon_engine_destroy(engine) == ARGON_STATUS_OK ? 0 : 16;
 }

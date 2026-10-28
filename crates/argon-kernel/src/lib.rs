@@ -472,6 +472,172 @@ impl SramTileSimulator {
     }
 }
 
+/// Precision format for simulated low-bitwidth neuromorphic execution (Milestone M6.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuantizationFormat {
+    /// 8-bit floating point (4 exponent bits, 3 mantissa bits).
+    Fp8E4M3,
+    /// 8-bit floating point (5 exponent bits, 2 mantissa bits).
+    Fp8E5M2,
+    /// 4-bit uniform integer with dynamic scaling register.
+    Int4Uniform,
+}
+
+/// Simulated low-bitwidth SRAM execution tile for neuromorphic hardware exploration (Phase 6).
+#[repr(align(64))]
+#[derive(Debug, Clone)]
+pub struct QuantizedSramTileSimulator {
+    inner: SramTileSimulator,
+    format: QuantizationFormat,
+}
+
+impl QuantizedSramTileSimulator {
+    /// Creates a quantized tile wrapping a standard tile simulator.
+    pub const fn new(simulator: SramTileSimulator, format: QuantizationFormat) -> Self {
+        Self {
+            inner: simulator,
+            format,
+        }
+    }
+
+    /// Quantizes a float according to the active quantization format.
+    pub fn quantize_scalar(value: f32, format: QuantizationFormat) -> f32 {
+        if !value.is_finite() {
+            return 0.0;
+        }
+        match format {
+            QuantizationFormat::Fp8E4M3 => {
+                let clamped = value.clamp(-448.0, 448.0);
+                (clamped * 16.0).round() * (1.0 / 16.0)
+            }
+            QuantizationFormat::Fp8E5M2 => {
+                let clamped = value.clamp(-57_344.0, 57_344.0);
+                (clamped * 4.0).round() * 0.25
+            }
+            QuantizationFormat::Int4Uniform => {
+                let clamped = value.clamp(-7.0, 7.0);
+                clamped.round()
+            }
+        }
+    }
+
+    /// Executes a fused Forward-Forward step with low-bitwidth quantization emulation.
+    ///
+    /// # Errors
+    /// Returns [`KernelError`] if dimensions or hyperparameters are invalid.
+    pub fn step_quantized(
+        &mut self,
+        input_slice: &[f32],
+        output_slice: &mut [f32],
+        plasticity: &PlasticityConfig,
+    ) -> Result<f32, KernelError> {
+        let goodness = self.inner.step_in_sram(input_slice, output_slice, plasticity)?;
+        for out in output_slice.iter_mut() {
+            *out = Self::quantize_scalar(*out, self.format);
+        }
+        Ok(goodness)
+    }
+
+    /// Returns the underlying tile simulator.
+    pub const fn inner(&self) -> &SramTileSimulator {
+        &self.inner
+    }
+
+    /// Returns the active quantization format.
+    pub const fn format(&self) -> QuantizationFormat {
+        self.format
+    }
+}
+
+/// Leaky Integrate-and-Fire (LIF) neuron model for hybrid continuous/spiking dynamics (Milestone M6.3).
+#[derive(Debug, Clone)]
+pub struct LifSpikeEncoder {
+    membrane_potentials: Vec<f32>,
+    threshold: f32,
+    leak_factor: f32,
+    rest_potential: f32,
+}
+
+impl LifSpikeEncoder {
+    /// Creates a new LIF encoder for `dimension` parallel channels.
+    ///
+    /// # Errors
+    /// Returns [`KernelError::InvalidHyperparameter`] if threshold or leak factor are invalid.
+    pub fn new(dimension: usize, threshold: f32, leak_factor: f32) -> Result<Self, KernelError> {
+        if dimension == 0 {
+            return Err(KernelError::DimensionMismatch {
+                expected: 1,
+                actual: 0,
+            });
+        }
+        if !threshold.is_finite() || threshold <= 0.0 {
+            return Err(KernelError::InvalidHyperparameter(
+                "LIF threshold must be finite and strictly positive",
+            ));
+        }
+        if !leak_factor.is_finite() || leak_factor <= 0.0 || leak_factor >= 1.0 {
+            return Err(KernelError::InvalidHyperparameter(
+                "LIF leak factor must be within (0.0, 1.0)",
+            ));
+        }
+        Ok(Self {
+            membrane_potentials: vec![0.0; dimension],
+            threshold,
+            leak_factor,
+            rest_potential: 0.0,
+        })
+    }
+
+    /// Ingests continuous current inputs and produces discrete binary spikes (1.0 for spike, 0.0 otherwise).
+    ///
+    /// # Errors
+    /// Returns [`KernelError::DimensionMismatch`] if input or output lengths differ from dimension.
+    pub fn encode_step(
+        &mut self,
+        current_input: &[f32],
+        spikes_output: &mut [f32],
+    ) -> Result<usize, KernelError> {
+        if current_input.len() != self.membrane_potentials.len() {
+            return Err(KernelError::DimensionMismatch {
+                expected: self.membrane_potentials.len(),
+                actual: current_input.len(),
+            });
+        }
+        if spikes_output.len() != self.membrane_potentials.len() {
+            return Err(KernelError::DimensionMismatch {
+                expected: self.membrane_potentials.len(),
+                actual: spikes_output.len(),
+            });
+        }
+
+        let mut spike_count = 0;
+        for (i, (&input_current, spike_slot)) in
+            current_input.iter().zip(spikes_output.iter_mut()).enumerate()
+        {
+            let v = self.membrane_potentials[i] * self.leak_factor + input_current;
+            if v >= self.threshold {
+                *spike_slot = 1.0;
+                self.membrane_potentials[i] = self.rest_potential;
+                spike_count += 1;
+            } else {
+                *spike_slot = 0.0;
+                self.membrane_potentials[i] = v;
+            }
+        }
+        Ok(spike_count)
+    }
+
+    /// Current membrane potentials.
+    pub fn membrane_potentials(&self) -> &[f32] {
+        &self.membrane_potentials
+    }
+
+    /// Resets all membrane potentials to rest.
+    pub fn reset(&mut self) {
+        self.membrane_potentials.fill(self.rest_potential);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,6 +704,56 @@ mod tests {
         }
         assert!((tile.weights()[0] - 0.499_536_37).abs() < 2.0e-7);
         assert!((tile.weights()[1] - 0.000_072_735_62).abs() < 2.0e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn quantized_sram_tile_executes_fp8_step() -> Result<(), KernelError> {
+        let grid = PersistentGridConfig {
+            grid_dim_x: 1,
+            block_dim_x: 32,
+            shared_mem_bytes: 1_024,
+            tile_dim: 4,
+        };
+        let weights = vec![0.25_f32; 16];
+        let tile = SramTileSimulator::new(&grid, &weights)?;
+        let mut qtile = QuantizedSramTileSimulator::new(tile, QuantizationFormat::Fp8E4M3);
+
+        let input = [1.0_f32, 0.5, 0.8, 0.2];
+        let mut output = [0.0_f32; 4];
+        let plasticity = PlasticityConfig {
+            learning_rate: 0.05,
+            goodness_threshold: 2.0,
+            weight_decay: 0.001,
+            phase_polarity: 1.0,
+        };
+
+        let goodness = qtile.step_quantized(&input, &mut output, &plasticity)?;
+        assert!(goodness > 0.0);
+        for &val in &output {
+            assert!(val.is_finite());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn lif_spike_encoder_threshold_and_leaks() -> Result<(), KernelError> {
+        let mut lif = LifSpikeEncoder::new(2, 1.0, 0.5)?;
+        let mut spikes = [0.0_f32; 2];
+
+        // Step 1: Sub-threshold current
+        let count1 = lif.encode_step(&[0.6, 0.4], &mut spikes)?;
+        assert_eq!(count1, 0);
+        assert_eq!(spikes, [0.0, 0.0]);
+
+        // Step 2: Channel 0 reaches threshold (0.6 * 0.5 + 0.8 = 1.1 >= 1.0)
+        let count2 = lif.encode_step(&[0.8, 0.3], &mut spikes)?;
+        assert_eq!(count2, 1);
+        assert_eq!(spikes, [1.0, 0.0]);
+        assert_eq!(lif.membrane_potentials()[0], 0.0); // Reset
+
+        lif.reset();
+        assert_eq!(lif.membrane_potentials(), &[0.0, 0.0]);
         Ok(())
     }
 }

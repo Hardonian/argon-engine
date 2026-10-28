@@ -192,6 +192,27 @@ class Engine {
     return Result<void>();
   }
 
+  /// Computes the cryptographic attestation hash of topology and weights (Milestone M7.2).
+  Result<uint64_t> AttestationHash() const {
+    if (!handle_) return Result<uint64_t>(ARGON_STATUS_NULL_POINTER);
+    uint64_t hash = 0;
+    ArgonStatus status = argon_engine_attestation_hash(handle_, &hash);
+    if (status != ARGON_STATUS_OK) {
+      return Result<uint64_t>(status);
+    }
+    return Result<uint64_t>(hash);
+  }
+
+  /// Verifies internal synaptic weight bounds and integrity invariants (Milestone M7.2).
+  Result<void> VerifyIntegrity() const {
+    if (!handle_) return Result<void>(ARGON_STATUS_NULL_POINTER);
+    ArgonStatus status = argon_engine_verify_integrity(handle_);
+    if (status != ARGON_STATUS_OK) {
+      return Result<void>(status);
+    }
+    return Result<void>();
+  }
+
   size_t NumLayers() const noexcept { return num_layers_; }
   size_t TileDim() const noexcept { return tile_dim_; }
   bool IsValid() const noexcept { return handle_ != nullptr; }

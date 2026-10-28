@@ -46,6 +46,14 @@ int main() {
   assert(restore_res.Ok());
   assert(engine.WeightChecksum().Value() == initial_checksum);
 
+  // 6. Cryptographic attestation and integrity verification (M7.2)
+  auto attestation_res = engine.AttestationHash();
+  assert(attestation_res.Ok());
+  assert(attestation_res.Value() != 0);
+
+  auto integrity_res = engine.VerifyIntegrity();
+  assert(integrity_res.Ok());
+
   std::cout << "All C++20 Google-style RAII smoke tests passed successfully.\n";
   return 0;
 }

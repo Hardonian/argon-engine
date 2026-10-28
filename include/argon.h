@@ -48,6 +48,9 @@ ArgonStatus argon_engine_export_weights(const ArgonEngineHandle *handle,
                                         size_t *out_written);
 ArgonStatus argon_engine_restore_weights(ArgonEngineHandle *handle,
                                          const float *in_weights, size_t len);
+ArgonStatus argon_engine_attestation_hash(const ArgonEngineHandle *handle,
+                                          uint64_t *out_hash);
+ArgonStatus argon_engine_verify_integrity(const ArgonEngineHandle *handle);
 ArgonStatus argon_engine_destroy(ArgonEngineHandle *handle);
 
 #ifdef __cplusplus

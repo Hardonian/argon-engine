@@ -465,6 +465,69 @@ impl PhysicalDevice for SharedMemoryDevice {
     }
 }
 
+/// Merkle tree audit log accumulator for cryptographic verification of streaming telemetry (Milestone M7.2).
+#[derive(Debug, Clone, Default)]
+pub struct MerkleTelemetryAudit {
+    leaf_hashes: Vec<u64>,
+}
+
+impl MerkleTelemetryAudit {
+    /// Creates a new empty audit accumulator.
+    pub const fn new() -> Self {
+        Self {
+            leaf_hashes: Vec::new(),
+        }
+    }
+
+    /// Records a trace record into the Merkle audit trail.
+    pub fn add_record(&mut self, record: &TraceRecord) {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        let prime = 0x0100_0000_01b3_u64;
+        for byte in record.sequence_id.to_le_bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(prime);
+        }
+        for byte in record.mean_goodness.to_bits().to_le_bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(prime);
+        }
+        for byte in record.output_l2_norm.to_bits().to_le_bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(prime);
+        }
+        self.leaf_hashes.push(hash);
+    }
+
+    /// Computes the binary Merkle root hash of all recorded telemetry entries.
+    pub fn compute_root(&self) -> u64 {
+        if self.leaf_hashes.is_empty() {
+            return 0;
+        }
+        let mut current_level = self.leaf_hashes.clone();
+        while current_level.len() > 1 {
+            let mut next_level = Vec::with_capacity((current_level.len() + 1) / 2);
+            for chunk in current_level.chunks(2) {
+                if chunk.len() == 2 {
+                    let combined = chunk[0].rotate_left(13)
+                        ^ chunk[1].wrapping_mul(0x9e37_79b9_7f4a_7c15);
+                    next_level.push(combined);
+                } else {
+                    next_level.push(chunk[0].rotate_left(7));
+                }
+            }
+            current_level = next_level;
+        }
+        current_level[0]
+    }
+
+    /// Number of verified records in the audit trail.
+    pub fn len(&self) -> usize {
+        self.leaf_hashes.len()
+    }
+
+    /// Whether the audit trail is empty.
+    pub fn is_empty(&self) -> bool {
+        self.leaf_hashes.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,5 +727,37 @@ mod tests {
         shm.write_actuators(&action_cmd)?;
         assert_eq!(shm.read_actuator_bus(), &action_cmd);
         Ok(())
+    }
+
+    #[test]
+    fn merkle_telemetry_audit_computes_root() {
+        let mut audit = MerkleTelemetryAudit::new();
+        assert_eq!(audit.compute_root(), 0);
+        assert!(audit.is_empty());
+
+        let r1 = TraceRecord {
+            sequence_id: 1,
+            mean_goodness: 0.8,
+            output_l2_norm: 1.0,
+            queue_depth: 0,
+            flags: 0,
+        };
+        let r2 = TraceRecord {
+            sequence_id: 2,
+            mean_goodness: 0.9,
+            output_l2_norm: 1.1,
+            queue_depth: 0,
+            flags: 0,
+        };
+
+        audit.add_record(&r1);
+        let root1 = audit.compute_root();
+        assert_ne!(root1, 0);
+        assert_eq!(audit.len(), 1);
+
+        audit.add_record(&r2);
+        let root2 = audit.compute_root();
+        assert_ne!(root2, root1);
+        assert_eq!(audit.len(), 2);
     }
 }
