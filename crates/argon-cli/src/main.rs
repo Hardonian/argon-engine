@@ -34,6 +34,7 @@ enum Command {
     ModelInfo,
     VerifyParity,
     Replay,
+    ExportSheets,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +98,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::ModelInfo => model_info(&options)?,
         Command::VerifyParity => verify_parity(options.format)?,
         Command::Replay => replay(&options)?,
+        Command::ExportSheets => export_sheets(&options)?,
         Command::Bench | Command::Run => {
             let report = execute(&options)?;
             print_report(&options, report);
@@ -110,7 +112,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn print_help() {
     println!(
-        "Usage: argon-cli [bench|run|inspect|doctor|models|complete|pull|unload|model-info|verify-parity|replay FILE] [--medium] \
+        "Usage: argon-cli [bench|run|inspect|doctor|models|complete|pull|unload|model-info|verify-parity|replay FILE|export-sheets FILE] [--medium] \
          [--iterations N] [--warmup N] [--scenario equilibrium|shock|sustained] \
          [--format text|json|csv] [--record FILE] [--local-stack auto|ollama|llama-cpp|lm-studio|openai-compatible] \
          [--endpoint http://127.0.0.1:PORT] [--model MODEL] [--prompt TEXT] [--max-tokens N] \
@@ -510,14 +512,15 @@ fn parse_options(arguments: &[String]) -> Result<Options, Box<dyn Error>> {
             "model-info" | "info" => Command::ModelInfo,
             "verify-parity" | "parity" => Command::VerifyParity,
             "replay" => Command::Replay,
+            "export-sheets" => Command::ExportSheets,
             _ => return Err(format!("unknown command: {command}").into()),
         };
         index += 1;
-        if options.command == Command::Replay {
+        if options.command == Command::Replay || options.command == Command::ExportSheets {
             options.replay = Some(PathBuf::from(
                 expanded
                     .get(index)
-                    .ok_or("replay requires a recording path")?,
+                    .ok_or("command requires a recording or telemetry path")?,
             ));
             index += 1;
         }
@@ -833,6 +836,62 @@ fn replay(options: &Options) -> Result<(), Box<dyn Error>> {
         return Err("deterministic replay mismatch".into());
     }
     println!("replay=verified checksum={:016x}", report.weight_checksum);
+    Ok(())
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn export_sheets(options: &Options) -> Result<(), Box<dyn Error>> {
+    let path = options.replay.as_ref().ok_or("missing telemetry path")?;
+    let file = fs::File::open(path)?;
+    let mut reader = argon_io::TelemetryLogReader::new(file)?;
+
+    let mut out_writer: Box<dyn Write> = match &options.record {
+        Some(out_path) => Box::new(fs::File::create(out_path)?),
+        None => Box::new(std::io::stdout()),
+    };
+
+    writeln!(
+        out_writer,
+        "Sequence_ID,Mean_Goodness,Output_L2_Norm,Queue_Depth,Flags"
+    )?;
+    let mut total_records = 0_u64;
+    let mut sum_goodness = 0.0_f64;
+    let mut sum_norm = 0.0_f64;
+
+    while let Some(record) = reader.read_record()? {
+        writeln!(
+            out_writer,
+            "{},{:.6},{:.6},{},{}",
+            record.sequence_id,
+            record.mean_goodness,
+            record.output_l2_norm,
+            record.queue_depth,
+            record.flags
+        )?;
+        total_records += 1;
+        sum_goodness += f64::from(record.mean_goodness);
+        sum_norm += f64::from(record.output_l2_norm);
+    }
+
+    if options.record.is_some() {
+        let avg_goodness = if total_records > 0 {
+            sum_goodness / (total_records as f64)
+        } else {
+            0.0
+        };
+        let avg_norm = if total_records > 0 {
+            sum_norm / (total_records as f64)
+        } else {
+            0.0
+        };
+        println!(
+            "export_sheets=complete records={} avg_goodness={:.4} avg_norm={:.4} source={}",
+            total_records,
+            avg_goodness,
+            avg_norm,
+            path.display()
+        );
+    }
     Ok(())
 }
 

@@ -640,6 +640,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn shared_memory_device_and_sensor_frame_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let frame = SensorFrame::new(1_000_000, 42, 1, [0.1_f32, 0.2, 0.3, 0.4]);
         assert_eq!(frame.timestamp_ns, 1_000_000);

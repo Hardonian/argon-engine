@@ -14,6 +14,7 @@ argon-medium = { path = "../argon-medium", version = "0.1.0" }
 argon-runtime = { path = "../argon-runtime", version = "0.1.0" }
 argon-ffi = { path = "../argon-ffi", version = "0.1.0" }
 argon-backend = { path = "../argon-backend", version = "0.1.0" }
+argon-io = { path = "../argon-io", version = "0.1.0" }
 
 [lints]
 workspace = true
