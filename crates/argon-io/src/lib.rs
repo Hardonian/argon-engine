@@ -366,6 +366,103 @@ impl PhysicalDevice for LoopbackDevice {
     }
 }
 
+/// Fixed-capacity timestamped sensor frame representation for real-time buses (CAN-FD, Micro-ROS).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SensorFrame<const N: usize> {
+    /// Timestamp in nanoseconds.
+    pub timestamp_ns: u64,
+    /// Sequence identifier on the communication bus.
+    pub sequence_id: u64,
+    /// Hardware channel or sensor node identifier.
+    pub channel_id: u32,
+    /// Sensor readings payload.
+    pub data: [f32; N],
+}
+
+impl<const N: usize> SensorFrame<N> {
+    /// Creates a new sensor frame with the specified header and data.
+    pub const fn new(timestamp_ns: u64, sequence_id: u64, channel_id: u32, data: [f32; N]) -> Self {
+        Self {
+            timestamp_ns,
+            sequence_id,
+            channel_id,
+            data,
+        }
+    }
+}
+
+/// In-memory shared memory / IPC device adapter simulating zero-allocation bus exchange.
+#[derive(Debug)]
+pub struct SharedMemoryDevice {
+    dimension: usize,
+    sensor_buffer: Vec<f32>,
+    actuator_buffer: Vec<f32>,
+    exchange_count: u64,
+}
+
+impl SharedMemoryDevice {
+    /// Creates a new shared-memory device with the given dimension.
+    ///
+    /// # Errors
+    /// Returns [`IoError::Transport`] if dimension is zero.
+    pub fn new(dimension: usize) -> Result<Self, IoError> {
+        if dimension == 0 {
+            return Err(IoError::Transport("shared memory dimension must be non-zero"));
+        }
+        Ok(Self {
+            dimension,
+            sensor_buffer: vec![0.5; dimension],
+            actuator_buffer: vec![0.0; dimension],
+            exchange_count: 0,
+        })
+    }
+
+    /// Injects sensory data into the shared memory area.
+    ///
+    /// # Errors
+    /// Returns [`IoError::DimensionMismatch`] if input length differs from dimension.
+    pub fn write_sensor_bus(&mut self, sensors: &[f32]) -> Result<(), IoError> {
+        if sensors.len() != self.dimension {
+            return Err(IoError::DimensionMismatch);
+        }
+        self.sensor_buffer.copy_from_slice(sensors);
+        Ok(())
+    }
+
+    /// Reads back actuator command states written by the coordinator.
+    pub fn read_actuator_bus(&self) -> &[f32] {
+        &self.actuator_buffer
+    }
+
+    /// Total exchange cycles completed.
+    pub const fn exchange_count(&self) -> u64 {
+        self.exchange_count
+    }
+}
+
+impl PhysicalDevice for SharedMemoryDevice {
+    fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    fn read_sensors(&mut self, output: &mut [f32]) -> Result<(), IoError> {
+        if output.len() != self.dimension {
+            return Err(IoError::DimensionMismatch);
+        }
+        output.copy_from_slice(&self.sensor_buffer);
+        self.exchange_count = self.exchange_count.saturating_add(1);
+        Ok(())
+    }
+
+    fn write_actuators(&mut self, actions: &[f32]) -> Result<(), IoError> {
+        if actions.len() != self.dimension {
+            return Err(IoError::DimensionMismatch);
+        }
+        self.actuator_buffer.copy_from_slice(actions);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,6 +636,30 @@ mod tests {
         assert_eq!(read_count, 2);
         assert_eq!(dest[0], batch[0]);
         assert_eq!(dest[1], batch[1]);
+        Ok(())
+    }
+
+    #[test]
+    fn shared_memory_device_and_sensor_frame_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        let frame = SensorFrame::new(1_000_000, 42, 1, [0.1_f32, 0.2, 0.3, 0.4]);
+        assert_eq!(frame.timestamp_ns, 1_000_000);
+        assert_eq!(frame.sequence_id, 42);
+        assert_eq!(frame.channel_id, 1);
+        assert_eq!(frame.data.len(), 4);
+
+        let mut shm = SharedMemoryDevice::new(4)?;
+        assert_eq!(shm.dimension(), 4);
+        assert_eq!(shm.exchange_count(), 0);
+
+        shm.write_sensor_bus(&frame.data)?;
+        let mut sensors_out = [0.0_f32; 4];
+        shm.read_sensors(&mut sensors_out)?;
+        assert_eq!(sensors_out, frame.data);
+        assert_eq!(shm.exchange_count(), 1);
+
+        let action_cmd = [0.8_f32, 0.7, 0.6, 0.5];
+        shm.write_actuators(&action_cmd)?;
+        assert_eq!(shm.read_actuator_bus(), &action_cmd);
         Ok(())
     }
 }

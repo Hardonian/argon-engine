@@ -714,6 +714,14 @@ impl ArgonCoordinator {
         Ok(())
     }
 
+    /// Rescales all resident layer weights towards the target homeostatic norm (alias for [`apply_homeostasis`]).
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] when the target norm is invalid.
+    pub fn scale_weights(&mut self, target_norm: f32) -> Result<(), RuntimeError> {
+        self.apply_homeostasis(target_norm)
+    }
+
     /// Applies an independent homeostatic target norm to each layer.
     ///
     /// # Errors
@@ -752,6 +760,137 @@ impl SpscConsumer<'_> {
     /// Returns [`RuntimeError::RingBufferEmpty`] when no frame is ready.
     pub fn try_pop(&self) -> Result<ControlFrame, RuntimeError> {
         self.ring.try_pop()
+    }
+}
+
+/// Telemetry summary emitted by [`ArgonMeshCoordinator`] across all mesh nodes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeshTelemetry {
+    /// Number of active nodes in the mesh.
+    pub active_nodes: usize,
+    /// Aggregate mean goodness across all coordinated nodes.
+    pub mean_goodness: f32,
+    /// Mean L2 norm across all node outputs.
+    pub mean_output_norm: f32,
+    /// Sequence ID processed during this mesh tick.
+    pub sequence_id: u64,
+}
+
+/// Multi-tile concurrent coordinator managing an interconnected mesh of [`ArgonCoordinator`] nodes.
+pub struct ArgonMeshCoordinator {
+    nodes: Vec<ArgonCoordinator>,
+    tile_dim: usize,
+}
+
+impl ArgonMeshCoordinator {
+    /// Constructs a multi-node coordinator mesh with `num_nodes` identical [`ArgonCoordinator`] nodes.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] if `num_nodes == 0` or node construction fails.
+    pub fn new(
+        num_nodes: usize,
+        num_layers: usize,
+        grid_config: &PersistentGridConfig,
+        base_plasticity: PlasticityConfig,
+        ring_capacity: usize,
+    ) -> Result<Self, RuntimeError> {
+        if num_nodes == 0 {
+            return Err(RuntimeError::InvalidConfiguration(
+                "mesh node count must be greater than zero",
+            ));
+        }
+        let mut nodes = Vec::with_capacity(num_nodes);
+        for _ in 0..num_nodes {
+            nodes.push(ArgonCoordinator::new(
+                num_layers,
+                grid_config,
+                base_plasticity,
+                ring_capacity,
+            )?);
+        }
+        Ok(Self {
+            nodes,
+            tile_dim: grid_config.tile_dim,
+        })
+    }
+
+    /// Executes one synchronous borrowed-buffer step across all mesh nodes in lockstep.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] if input or output slices do not match `num_nodes * tile_dim`.
+    pub fn step_mesh(
+        &mut self,
+        sequence_id: u64,
+        phase_polarity: f32,
+        input_slices: &[f32],
+        output_slices: &mut [f32],
+    ) -> Result<MeshTelemetry, RuntimeError> {
+        let expected_len = self.nodes.len().saturating_mul(self.tile_dim);
+        if input_slices.len() != expected_len {
+            return Err(RuntimeError::Kernel(KernelError::DimensionMismatch {
+                expected: expected_len,
+                actual: input_slices.len(),
+            }));
+        }
+        if output_slices.len() != expected_len {
+            return Err(RuntimeError::Kernel(KernelError::DimensionMismatch {
+                expected: expected_len,
+                actual: output_slices.len(),
+            }));
+        }
+
+        let mut total_goodness = 0.0_f32;
+        let mut total_norm = 0.0_f32;
+
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            let offset = i.saturating_mul(self.tile_dim);
+            let in_chunk = &input_slices[offset..offset + self.tile_dim];
+            let out_chunk = &mut output_slices[offset..offset + self.tile_dim];
+            let telem = node.step_borrowed(sequence_id, phase_polarity, in_chunk, out_chunk)?;
+            total_goodness += telem.mean_goodness;
+            total_norm += telem.output_l2_norm;
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let inv_n = 1.0_f32 / (self.nodes.len() as f32);
+        Ok(MeshTelemetry {
+            active_nodes: self.nodes.len(),
+            mean_goodness: total_goodness * inv_n,
+            mean_output_norm: total_norm * inv_n,
+            sequence_id,
+        })
+    }
+
+    /// Returns the number of nodes in the mesh.
+    pub const fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Returns the feature dimension of individual nodes.
+    pub const fn tile_dim(&self) -> usize {
+        self.tile_dim
+    }
+
+    /// Rescales weights uniformly across all nodes in the mesh.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] if any scaling parameter is invalid.
+    pub fn scale_mesh_weights(&mut self, target_norm: f32) -> Result<(), RuntimeError> {
+        for node in &mut self.nodes {
+            node.scale_weights(target_norm)?;
+        }
+        Ok(())
+    }
+
+    /// Computes the aggregate XOR checksum over all nodes in the mesh.
+    pub fn mesh_weight_checksum(&self) -> u64 {
+        let mut checksum = 0x5a5a_5a5a_5a5a_5a5a_u64;
+        for (i, node) in self.nodes.iter().enumerate() {
+            let node_sum = node.weight_checksum();
+            checksum = checksum.rotate_left(7) ^ node_sum.wrapping_add(i as u64);
+        }
+        checksum
     }
 }
 
@@ -902,6 +1041,49 @@ mod tests {
         let mut telemetry = [empty; 2];
         assert_eq!(coordinator.poll_batch(&mut output, &mut telemetry)?, 2);
         assert_eq!([telemetry[0].sequence_id, telemetry[1].sequence_id], [1, 2]);
+        Ok(())
+    }
+
+    #[test]
+    fn mesh_coordinator_executes_multi_node_lockstep() -> Result<(), RuntimeError> {
+        let grid = PersistentGridConfig {
+            grid_dim_x: 1,
+            block_dim_x: 64,
+            shared_mem_bytes: 16_384,
+            tile_dim: 4,
+        };
+        let plasticity = PlasticityConfig {
+            learning_rate: 0.02,
+            goodness_threshold: 1.0,
+            weight_decay: 0.001,
+            phase_polarity: 1.0,
+        };
+        let mut mesh = ArgonMeshCoordinator::new(3, 2, &grid, plasticity, 4)?;
+        assert_eq!(mesh.node_count(), 3);
+        assert_eq!(mesh.tile_dim(), 4);
+
+        let initial_checksum = mesh.mesh_weight_checksum();
+        assert_ne!(initial_checksum, 0);
+
+        let input_mesh = [
+            0.5_f32, 0.4, 0.3, 0.2, // Node 0
+            0.1, 0.6, 0.7, 0.8,     // Node 1
+            0.9, 0.2, 0.3, 0.4,     // Node 2
+        ];
+        let mut output_mesh = [0.0_f32; 12];
+
+        let telem = mesh.step_mesh(100, 1.0, &input_mesh, &mut output_mesh)?;
+        assert_eq!(telem.active_nodes, 3);
+        assert_eq!(telem.sequence_id, 100);
+        assert!(telem.mean_goodness > 0.0);
+        assert!(telem.mean_output_norm > 0.0);
+
+        let stepped_checksum = mesh.mesh_weight_checksum();
+        assert_ne!(stepped_checksum, initial_checksum);
+
+        mesh.scale_mesh_weights(1.5)?;
+        let scaled_checksum = mesh.mesh_weight_checksum();
+        assert_ne!(scaled_checksum, stepped_checksum);
         Ok(())
     }
 }
