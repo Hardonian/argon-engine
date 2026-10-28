@@ -36,6 +36,7 @@ Argon integrates natively with the Google developer and cloud ecosystem:
 - **Bazel**: Hermetic Bzlmod builds via `MODULE.bazel` and `BUILD.bazel`.
 - **Android NDK**: Cross-compilation for `arm64-v8a` Pixel devices in `bindings/android/`.
 - **Antigravity / Gemini MCP**: Native Model Context Protocol server in `scripts/argon_mcp_server.py`.
+- **Google Workspace & GSuite**: Synchronous live telemetry streaming to Google Sheets (`GoogleSheetsTelemetrySync`), executive reporting for Google Docs (`GoogleDocsReportGenerator`), and checkpoint bundling for Google Drive (`GoogleDriveModelArchive`) in [`bindings/python/argon_engine/workspace.py`](file:///c:/Users/scott/argon-engine/bindings/python/argon_engine/workspace.py).
 - Comprehensive developer guide in [`docs/google_developer_guide.md`](file:///c:/Users/scott/argon-engine/docs/google_developer_guide.md) and [`docs/google-ecosystem.md`](file:///c:/Users/scott/argon-engine/docs/google-ecosystem.md).
 
 ## Architectural Pillars & Delivery Roadmap

@@ -181,3 +181,46 @@ docker push gcr.io/${PROJECT_ID}/argon-vertex:latest
 | Warmed Allocations | `0 bytes` | **`0 bytes`** (verified via `zero_allocation` test) |
 | C++20 Call Overhead | `< 50 ns` | Zero-copy via `std::span` |
 | Serialization | Bit-exact | `xxHash64` bit-exact verification |
+
+---
+
+## 8. Google Workspace (GSuite): Synchronous Telemetry, Sheets & Drive Automation
+
+Argon provides synchronous utilities for live reporting and experiment analysis in Google Workspace:
+
+```python
+from argon_engine import (
+    ArgonEngine,
+    GoogleSheetsTelemetrySync,
+    GoogleDocsReportGenerator,
+    GoogleDriveModelArchive,
+)
+
+# 1. Run inference and stream directly to Google Sheets sync
+sync = GoogleSheetsTelemetrySync(title="Argon Experiment 01")
+with ArgonEngine(num_layers=2, tile_dim=8) as engine:
+    inputs = np.ones(8, dtype=np.float32) * 0.5
+    for seq in range(100):
+        out, telem = engine.step(inputs, polarity=1.0)
+        sync.record_engine_telemetry(telem)
+
+# 2. Synchronous export to Google Sheets CSV with formula rows
+sync.export_csv("telemetry_sheets.csv")
+
+# 3. Generate executive Google Docs markdown summary
+report = GoogleDocsReportGenerator.generate_markdown_report(
+    engine_topology={"num_layers": 2, "tile_dim": 8},
+    initial_checksum=0x1234,
+    final_checksum=engine.weight_checksum(),
+    telemetry_summary={"total_ticks": 100, "mean_goodness": 1.25, "output_l2_norm": 1.05},
+)
+GoogleDocsReportGenerator.export_report("session_summary.md", report)
+
+# 4. Bundle into Google Drive package
+GoogleDriveModelArchive.package_bundle(
+    output_directory="./drive_export",
+    weights=engine.export_weights(),
+    topology={"num_layers": 2, "tile_dim": 8},
+    telemetry_sync=sync,
+)
+```

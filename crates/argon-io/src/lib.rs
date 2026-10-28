@@ -407,7 +407,9 @@ impl SharedMemoryDevice {
     /// Returns [`IoError::Transport`] if dimension is zero.
     pub fn new(dimension: usize) -> Result<Self, IoError> {
         if dimension == 0 {
-            return Err(IoError::Transport("shared memory dimension must be non-zero"));
+            return Err(IoError::Transport(
+                "shared memory dimension must be non-zero",
+            ));
         }
         Ok(Self {
             dimension,
