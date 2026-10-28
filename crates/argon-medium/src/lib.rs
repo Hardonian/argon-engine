@@ -818,6 +818,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn lyapunov_certifier_validates_decaying_energy_trajectory() -> Result<(), MediumError> {
         let decaying_trajectory = [10.0_f32, 8.0, 6.4, 5.12, 4.096, 3.2768];
         let cert =
